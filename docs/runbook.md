@@ -102,24 +102,67 @@ source ~/CoCap/.venv-wsl/bin/activate
 This is the native H.264 parser. It is not on PyPI and it is the only remaining unknown in the
 whole pipeline.
 
+Its `install.sh` builds a patched FFmpeg 5.1 into `ffmpeg/ffmpeg_install` — not system-wide, so
+your distro FFmpeg is untouched — then runs `pip3 install .`.
+
+**Two patches are required on Ubuntu 24.04 / Python 3.12** (verified: without them the build
+fails twice over). Both are age-related incompatibilities upstream, not misconfiguration.
+
+| | Symptom | Cause |
+|---|---|---|
+| **A** | `mathops.h:125: Error: operand type mismatch for 'shr'` | FFmpeg 5.1 passes an unclipped shift constant to inline asm; binutils ≥ 2.41 rejects it. Fixed upstream in FFmpeg commit `effadce6c7` by masking with `& 0x1F`; 5.1 predates it. |
+| **B** | `cannot convert '_object*' to 'const PyArrayObject*'` | NumPy 2 tightened `PyArray_GETPTR3` to require `PyArrayObject *`, but `api.cpp` declares `mv_arr` as `PyObject *`. |
+
+Also cap the build parallelism — the script's `make -j` has **no job limit** and can spawn
+enough compilers to exhaust RAM and freeze the machine.
+
 ```bash
 git clone https://github.com/yaojie-shen/Compressed-Video-Reader.git ~/Compressed-Video-Reader
 cd ~/Compressed-Video-Reader
-cat README.md          # read it; the build steps are there
-pip install .
-python -c "import cv_reader; print('cv_reader OK')"
+
+# cap parallelism
+sed -i 's/^make -j || exit 1/make -j$(nproc) || exit 1/' ffmpeg/install_ffmpeg.sh
+
+# Patch B - use python, not sed; the nested parens are easy to mangle
+python - <<'PY'
+import pathlib
+p = pathlib.Path("src/cv_reader/api.cpp")
+s = p.read_text()
+old, new = "PyArray_GETPTR3(mv_arr,", "PyArray_GETPTR3((PyArrayObject *) mv_arr,"
+print(f"replaced {s.count(old)} occurrences")   # expect 4
+p.write_text(s.replace(old, new))
+PY
+
+bash install.sh 2>&1 | tee ~/cv_reader_install.log
 ```
 
-**If CMake cannot find a compatible FFmpeg**, the distro's libav* headers do not match what the
-extension expects. Build FFmpeg from source at the version its README names and point CMake at
-it — that is more reliable than fighting the packaged version.
+`install.sh` downloads FFmpeg fresh, so **Patch A can only be applied after that download**. Let
+the run above fail at the FFmpeg compile, then patch and resume by hand — `configure` has
+already run by that point, so only `make` is needed:
+
+```bash
+cd ~/Compressed-Video-Reader/ffmpeg/ffmpeg_source
+sed -i 's/"ic" ((uint8_t)(-s))/"ic" ((uint8_t)(-s \& 0x1F))/g' libavcodec/x86/mathops.h
+grep -c '0x1F' libavcodec/x86/mathops.h          # expect 2
+make -j$(nproc) && make install
+
+cd ~/Compressed-Video-Reader
+pip install .
+```
+
+Do **not** re-run `install.sh` after patching — it re-downloads FFmpeg and discards Patch A.
 
 **Timebox this.** If it is not building after a few hours, stop and tell me; the fallback is to
 port `read_frames_compressed_domain` onto a Python motion-vector extractor, which is real work
 but bounded, and the rest of the pipeline is already validated against a stub of exactly that
 interface.
 
-**Check** — `python -c "import cv_reader; print('cv_reader OK')"` prints OK.
+**Check** — the Python import is the one that matters; the CLI can work while the module landed
+outside the venv.
+```bash
+python -c "import cv_reader; print('cv_reader OK')"
+cv_reader ./test_data/h264_sample.mp4 ./test_output    # parses a real H.264 file
+```
 
 ---
 
