@@ -39,13 +39,34 @@ trainer:
   # batch * 8 GOP * 59 * 3 * 224 * 224. On a larger GPU raise batch_size and lower
   # accumulate_grad_batches, keeping the product at 12.
   accumulate_grad_batches: 6
-  max_epochs: 30
+  max_epochs: 13
   # The inherited base sets -1, which runs the *entire* 1000-clip validation set - each with
   # 32-step greedy decoding - before training starts. Two batches is what a sanity check is for.
   num_sanity_val_steps: 2
+  # Replaces the inherited list rather than extending it (hydra replaces lists), so the two
+  # inherited callbacks are repeated here.
+  callbacks:
+    - _target_: "pytorch_lightning.callbacks.LearningRateMonitor"
+      logging_interval: "step"
+    # every epoch, so any epoch can be resumed from or re-evaluated
+    - _target_: "pytorch_lightning.callbacks.ModelCheckpoint"
+      save_top_k: -1
+      filename: "epoch{epoch:02d}"
+      auto_insert_metric_name: false
+    # and separately track the best epoch by the headline metric, so picking the number to
+    # report does not mean reading it off a TensorBoard curve by eye
+    - _target_: "pytorch_lightning.callbacks.ModelCheckpoint"
+      monitor: "CIDEr"
+      mode: "max"
+      save_top_k: 1
+      filename: "best-epoch{epoch:02d}-cider{CIDEr:.4f}"
+      auto_insert_metric_name: false
 
 model:
   lr: 1e-4
   clip_lr: 1e-6
   warmup_ratio: 0.1
-  lr_decay_gamma: 0.95
+  # The scheduler decays per epoch, so this has to be retuned whenever max_epochs changes.
+  # At 0.95 the LR only reaches 0.95^13 = 0.51 of peak by the end of a 13-epoch run, leaving the
+  # model under-annealed; 0.92 lands at 0.34, close to what 0.95 over 20 epochs would have given.
+  lr_decay_gamma: 0.92

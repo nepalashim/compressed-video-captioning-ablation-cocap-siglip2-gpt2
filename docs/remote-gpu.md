@@ -197,48 +197,48 @@ tensorboard --logdir logs/ --host 0.0.0.0  # then SSH-forward port 6006
 
 ## 7. Cost
 
-Epoch is **24,995 iterations** at batch 2 (49,990 samples). The honest position is that
-per-epoch time must be **measured**, not predicted — this workload is bound by memory bandwidth
-and video decoding, so FLOPs comparisons mislead. Read the `it/s` at ~300 iterations and find
-your row:
+Runs are configured for **13 epochs**. An epoch is **24,995 iterations** at batch 2 (49,990
+samples). The honest position is that per-epoch time must be **measured**, not predicted — this
+workload is bound by memory bandwidth and video decoding, so FLOPs comparisons mislead. Read the
+`it/s` at ~300 iterations and find your row:
 
-| observed it/s | h/epoch | 10 epochs | 20 epochs | 30 epochs |
-|---|---|---|---|---|
-| 1.0 | 6.9 | 69 h | 139 h | 208 h |
-| 2.0 | 3.5 | 35 h | 69 h | 104 h |
-| 3.5 | 2.0 | 20 h | 40 h | 60 h |
-| 5.0 | 1.4 | 14 h | 28 h | 42 h |
-| 8.0 | 0.9 | 9 h | 17 h | 26 h |
-
-**At $0.30/hr, for one run:**
-
-| h/epoch | 10 epochs | 20 epochs | 30 epochs |
+| observed it/s | h/epoch | 13 epochs (one run) | @ $0.30/hr |
 |---|---|---|---|
-| 1 | $3 | $6 | $9 |
-| 2 | $6 | $12 | $18 |
-| 3 | $9 | $18 | $27 |
-| 4 | $12 | $24 | $36 |
+| 1.0 | 6.9 | 90 h | $27 |
+| 2.0 | 3.5 | 45 h | **$14** |
+| 3.5 | 2.0 | 26 h | **$8** |
+| 5.0 | 1.4 | 18 h | $5 |
+| 8.0 | 0.9 | 11 h | $3 |
 
-**But you need more than one run.** The full experiment matrix is three variants (baseline,
-siglip, siglip_gpt2) × 2 seeds = **6 runs**, because 4,999 training videos is small enough that
+**But you need more than one run.** The full matrix is three variants (baseline, siglip,
+siglip_gpt2) × 2 seeds = **6 runs**, because 4,999 training videos is small enough that
 single-run differences sit inside the noise:
 
 | scenario | GPU-hours | cost @ $0.30/hr |
 |---|---|---|
-| 1 run, 20 epochs @ 2 h/epoch | 40 h | **$12** |
-| 4 runs (2 variants × 2 seeds), 20 epochs @ 2 h/epoch | 160 h | **$48** |
-| 6 runs (3 variants × 2 seeds), 20 epochs @ 2 h/epoch | 240 h | **$72** |
-| 6 runs, 30 epochs @ 3 h/epoch | 540 h | **$162** |
+| 1 run @ 2 h/epoch | 26 h | **$8** |
+| 4 runs (2 variants × 2 seeds) @ 2 h/epoch | 104 h | **$31** |
+| 6 runs (3 variants × 2 seeds) @ 2 h/epoch | 156 h | **$47** |
+| 6 runs @ 3.5 h/epoch (pessimistic) | 273 h | **$82** |
 
-Three ways to cut that, none of which weaken the paper:
+So budget roughly **$30–80 for the whole paper**, assuming ~2 h/epoch.
 
-1. **Fewer epochs.** 30 on 4,999 videos is likely more than needed — watch validation CIDEr and
-   stop when it plateaus. This is usually the biggest saving.
-2. **Drop the `siglip` variant.** It is the encoder-only ablation. Useful for attributing the
-   gain, but not required to claim one. Takes 6 runs to 4.
-3. **`unfold_sentences: False`** — cuts the epoch from 49,990 samples to 4,999 (one pass per
-   video with a randomly chosen caption) — a straight **10×** on decoding. You would raise the
-   epoch count to compensate, but total video decodes still drop sharply.
+Two further levers if that is still too much, neither of which weakens the paper:
+
+1. **Drop the `siglip` variant.** It is the encoder-only ablation — useful for attributing the
+   gain between the encoder and the decoder swap, but not required to claim one. Takes 6 runs
+   to 4.
+2. **`unfold_sentences: False`** — cuts the epoch from 49,990 samples to 4,999 (one pass per
+   video, with a randomly chosen caption each epoch) — a straight **10×** on video decoding.
+   Raise the epoch count to compensate; total decodes still drop sharply.
+
+### A note on epoch count and the LR schedule
+
+`lr_decay_gamma` decays **per epoch**, so it has to be retuned whenever `max_epochs` changes. At
+the inherited 0.95 a 13-epoch run only reaches `0.95^13 = 0.51` of peak LR by the end, leaving
+the model under-annealed and costing final CIDEr. The config uses **0.92**, which lands at 0.34.
+
+If you change the epoch count, retune it: `gamma = 0.34 ** (1 / max_epochs)`.
 
 ---
 
