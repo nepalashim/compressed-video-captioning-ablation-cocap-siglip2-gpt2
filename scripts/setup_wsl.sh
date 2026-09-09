@@ -114,30 +114,42 @@ step "CLIP weights (baseline run only)"
 bash model_zoo/download_model.sh
 
 # --------------------------------------------------------------------------------------------
-cat <<'EOF'
+cat <<EOF
 
 ============================================================================================
-Remaining manual step: build cv_reader (the compressed-domain parser). It is not on PyPI.
+This shell does NOT have the venv active - the script activated it in its own process only.
+Activate it before anything else, or packages land in system Python:
+
+    source ${REPO_ROOT}/${VENV_DIR}/bin/activate
+    which pip        # must print ${REPO_ROOT}/${VENV_DIR}/bin/pip
+
+Remaining manual step: build cv_reader (the compressed-domain parser). It is not on PyPI, and
+it builds in its own directory, not inside this repo.
 
     git clone https://github.com/yaojie-shen/Compressed-Video-Reader.git ~/Compressed-Video-Reader
     cd ~/Compressed-Video-Reader
-    # follow its README (CMake, links the libav* headers installed above)
+    cat README.md        # follow it; the CMake steps and FFmpeg version are there
     pip install .
     python -c "import cv_reader; print('cv_reader OK')"
 
 If CMake cannot find a compatible FFmpeg, build FFmpeg from source at the version its README
 names rather than fighting the distro packages.
 
-Then, in this repo:
+Then, back in ${REPO_ROOT}. Set VATEX_SUBSET_ROOT to wherever you put the clips - prefer a copy
+on the Linux filesystem, since reading them over /mnt/c during training is slow enough to
+starve the GPU. If you already added it to ~/.bashrc, do not re-export it here.
 
-    export VATEX_SUBSET_ROOT=/mnt/c/Research-Personal/Datasetextract5000train1000validfromhuggingface
-    python tools/verify_motion_channels.py --video_dir "$VATEX_SUBSET_ROOT/train"   # checks motion_channels=2
-    python tools/prepare_vatex_subset.py \
-        --annotations "$VATEX_SUBSET_ROOT/VATEX_Caption.json" \
-        --train_dir   "$VATEX_SUBSET_ROOT/train" \
-        --val_dir     "$VATEX_SUBSET_ROOT/val" \
+    echo "\$VATEX_SUBSET_ROOT"    # confirm it points at your clips
+    python tools/verify_motion_channels.py --video_dir "\$VATEX_SUBSET_ROOT/train"
+    python tools/prepare_vatex_subset.py \\
+        --annotations "\$VATEX_SUBSET_ROOT/VATEX_Caption.json" \\
+        --train_dir   "\$VATEX_SUBSET_ROOT/train" \\
+        --val_dir     "\$VATEX_SUBSET_ROOT/val" \\
         --output_dir  ./dataset/vatex_subset
     pytest test/ -q
+    python tools/validate_data_pipeline.py --variant baseline -n 200 --build-model
     python tools/train_net.py --config-name=exp/train/vatex_subset_baseline
+
+Full sequence with checks: docs/runbook.md
 ============================================================================================
 EOF
