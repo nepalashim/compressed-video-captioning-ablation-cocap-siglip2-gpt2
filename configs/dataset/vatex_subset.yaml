@@ -23,11 +23,13 @@ max_words: 32           # VATEX captions are ~15 words; shorter than the 77 defa
 unfold_sentences: True
 tokenizer: "clip"       # "gpt2" for the GPT-2 decoder variant
 
+# Sampling budget. The paper's N=8, M=59 was run on 32 GB V100s; on 8 GB it pins VRAM at 94%
+# and the allocator thrashes (100% GPU util at a third of power draw). See decision L10.
 cv_config:
-  num_gop: 8            # the clips supply ~5 GOPs; see decision L3 in docs/implementation-plan.md
-  num_mv: 59            # keyint 60 => M = 59
-  num_res: 59
+  num_gop: 5            # measured: only ~5.2 of 8 sampled GOPs are distinct, so 8 buys nothing
+  num_mv: 16            # of the 59 B/P frames per GOP (keyint 60 => M = 59)
+  num_res: 16
   motion_channels: 2    # no B-frames, so the L1 motion vector pair is identically zero
   with_residual: True
   use_pre_extract: False
-  sample: "rand"
+  sample: "rand"        # samples num_mv/num_res B/P frames per GOP at random each epoch
