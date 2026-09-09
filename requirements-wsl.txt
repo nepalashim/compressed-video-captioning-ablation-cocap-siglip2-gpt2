@@ -62,3 +62,4 @@ packaging                   # clip.py uses it directly; pkg_resources is gone in
 
 # --- dev -----------------------------------------------------------------------------------
 pytest
+matplotlib                  # test_video_readers.py only, for visualising decoded motion vectors
