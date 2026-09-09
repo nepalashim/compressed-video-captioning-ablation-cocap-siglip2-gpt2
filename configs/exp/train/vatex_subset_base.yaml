@@ -1,0 +1,48 @@
+# @package _global_
+#
+# Shared settings for every VATEX-subset experiment. The per-variant configs
+# (vatex_subset_baseline / _siglip / _siglip_gpt2) inherit this and change only the model.
+
+defaults:
+  - /train # define in code
+  - /dataset@train_dataloader.dataset: vatex_subset
+  - /dataset@val_dataloader.dataset: vatex_subset
+  - /exp/train/base
+  - _self_
+# NOTE: each variant config selects its own `- /model@model: ...` entry.
+
+# The clip directory comes from $VATEX_SUBSET_ROOT (see configs/dataset/vatex_subset.yaml).
+# This is the only dataset used in this project; the msrvtt / msvd / full-vatex configs that
+# ship with upstream CoCap are left untouched and are not part of any experiment here.
+train_dataloader:
+  dataset:
+    split: "train"
+    video_root: "${oc.env:VATEX_SUBSET_ROOT,C:/Research-Personal/Datasetextract5000train1000validfromhuggingface}/train"
+  batch_size: 2
+  num_workers: 6
+  prefetch_factor: 2
+
+val_dataloader:
+  dataset:
+    split: "test"
+    video_root: "${oc.env:VATEX_SUBSET_ROOT,C:/Research-Personal/Datasetextract5000train1000validfromhuggingface}/val"
+  batch_size: 2
+  num_workers: 6
+  prefetch_factor: 2
+
+trainer:
+  devices: 1
+  strategy: "auto"
+  precision: "bf16-mixed"
+  # Effective optimization batch is batch_size * accumulate_grad_batches = 12.
+  # On 8 GB the per-device batch cannot exceed ~2: the residual tensor alone is
+  # batch * 8 GOP * 59 * 3 * 224 * 224. On a larger GPU raise batch_size and lower
+  # accumulate_grad_batches, keeping the product at 12.
+  accumulate_grad_batches: 6
+  max_epochs: 30
+
+model:
+  lr: 1e-4
+  clip_lr: 1e-6
+  warmup_ratio: 0.1
+  lr_decay_gamma: 0.95

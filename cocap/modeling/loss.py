@@ -47,7 +47,9 @@ class LabelSmoothingLoss(LossBase):
 
     def forward(self, target, output):
         output = output["prediction_scores"]
-        output = output.view(-1, self.tgt_vocab_size)
+        # reshape, not view: a decoder that slices its logits (e.g. the GPT-2 head taking the
+        # text positions off the end of a visual+text sequence) returns a non-contiguous tensor
+        output = output.reshape(-1, self.tgt_vocab_size)
         target = target['input_labels'].reshape(-1).long()
         valid_indices = target != self.ignore_index  # ignore examples with target value -1
         target = target[valid_indices]

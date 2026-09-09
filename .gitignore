@@ -161,3 +161,14 @@ cython_debug/
 
 .idea
 .DS_Store
+
+# Downloaded pretrained weights
+model_zoo/clip_model/
+
+# Datasets and generated dataset metadata
+dataset/*/
+!dataset/README.md
+
+# Training outputs
+logs/
+video_reader_error.log

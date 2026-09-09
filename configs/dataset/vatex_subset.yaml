@@ -1,0 +1,33 @@
+# VATEX 5k/1k subset (HuggingFace export).
+#
+# The source clips are already H.264, keyint=60, B-frame free and 240p on the short edge, so no
+# re-encoding step is needed. Run tools/prepare_vatex_subset.py once to produce the two json
+# files referenced below.
+_target_: "cocap.data.datasets.compressed_video.dataset_vatex_subset.VATEXSubsetCaptioningDataset"
+
+# The one place the dataset location is defined. Override for WSL with:
+#   export VATEX_SUBSET_ROOT=/mnt/c/Research-Personal/Datasetextract5000train1000validfromhuggingface
+# (or copy the clips onto the ext4 filesystem and point at that instead - the 9p /mnt/c mount is
+# slow for the many-small-file reads this pipeline does).
+video_root: "${oc.env:VATEX_SUBSET_ROOT,C:/Research-Personal/Datasetextract5000train1000validfromhuggingface}/train"
+metadata: "./dataset/vatex_subset/vatex_subset_caption.json"
+id_to_file: "./dataset/vatex_subset/id_to_file.json"
+
+video_reader: "read_frames_compressed_domain"
+max_frames: 8
+video_size:
+  - 224
+  - 224
+max_words: 32           # VATEX captions are ~15 words; shorter than the 77 default and much
+                        # faster to greedily decode at validation time
+unfold_sentences: True
+tokenizer: "clip"       # "gpt2" for the GPT-2 decoder variant
+
+cv_config:
+  num_gop: 8            # the clips supply ~5 GOPs; see decision L3 in docs/implementation-plan.md
+  num_mv: 59            # keyint 60 => M = 59
+  num_res: 59
+  motion_channels: 2    # no B-frames, so the L1 motion vector pair is identically zero
+  with_residual: True
+  use_pre_extract: False
+  sample: "rand"

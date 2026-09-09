@@ -141,7 +141,7 @@ def read_frames_compressed_domain(
         video_path: str,
         resample_num_gop: int, resample_num_mv: int, resample_num_res: int,
         with_residual: bool = False, with_bp_rgb: bool = False, pre_extract: bool = False,
-        sample: str = "rand"
+        sample: str = "rand", motion_channels: int = 4
 ) -> Dict[str, np.ndarray]:
     """
     This function process the output of `cv_reader` to obtain the inputs for training
@@ -153,8 +153,15 @@ def read_frames_compressed_domain(
     :param with_bp_rgb: also return the decoded RGB frames of the video
     :param pre_extract: use pre-extracted data
     :param sample: sample method
+    :param motion_channels: number of motion vector channels to keep. `cv_reader` returns 4
+        channels for AVC, laid out as [dx_L0, dy_L0, dx_L1, dy_L1]: the L0 pair is the backward
+        (past) reference used by P-frames, the L1 pair the forward reference only B-frames use.
+        For a stream encoded without B-frames the L1 pair is identically zero, so keeping 2
+        channels halves the motion tensor at no information cost. Use 4 to keep the original
+        behaviour.
     :return:
     """
+    assert 1 <= motion_channels <= 4, f"motion_channels must be in [1, 4], got {motion_channels}"
     decord.bridge.set_bridge("torch")
     assert sample in {"rand", "uniform", "pad"}
     try:
@@ -253,9 +260,8 @@ def read_frames_compressed_domain(
                 if "encoded" in f and f["encoded"]:
                     continue
                 else:
-                    f["motion_vector"] = torch.from_numpy(
-                        f["motion_vector"].transpose((2, 0, 1)).astype(np.float32)
-                    )
+                    mv = f["motion_vector"].transpose((2, 0, 1)).astype(np.float32)  # HWC -> CHW
+                    f["motion_vector"] = torch.from_numpy(mv[:motion_channels])
                     f["encoded"] = True
         timer("encode_motion")
         # stack mv
@@ -323,7 +329,8 @@ def read_frames_compressed_domain(
         # create a dummy return data
         ret = {
             "iframe": torch.zeros((resample_num_gop, 3, 224, 224), dtype=torch.float),
-            "motion_vector": torch.zeros((resample_num_gop, resample_num_mv, 4, 56, 56), dtype=torch.float),
+            "motion_vector": torch.zeros((resample_num_gop, resample_num_mv, motion_channels, 56, 56),
+                                         dtype=torch.float),
             "input_mask_gop": torch.ones((resample_num_gop,), dtype=torch.bool),
             "input_mask_mv": torch.ones((resample_num_gop, resample_num_mv), dtype=torch.bool),
             "input_mask_res": torch.ones((resample_num_gop, resample_num_mv), dtype=torch.bool),

@@ -102,6 +102,9 @@ class CVConfig:
     with_residual: bool
     use_pre_extract: bool
     sample: str
+    #: motion vector channels to keep; 2 drops the all-zero L1 (B-frame) pair on a stream
+    #: encoded without B-frames, 4 preserves the original behaviour
+    motion_channels: int = 4
 
 
 def get_video(video_reader, video_path, max_frames, sample, hevc_config: None | CVConfig = None):
@@ -114,7 +117,8 @@ def get_video(video_reader, video_path, max_frames, sample, hevc_config: None | 
                                 resample_num_res=hevc_config.num_res,
                                 with_residual=hevc_config.with_residual,
                                 pre_extract=hevc_config.use_pre_extract,
-                                sample=hevc_config.sample if hevc_config.sample == "pad" else sample)
+                                sample=hevc_config.sample if hevc_config.sample == "pad" else sample,
+                                motion_channels=getattr(hevc_config, "motion_channels", 4))
     else:
         video, _ = video_reader(video_path, max_frames, sample)
     return video, video_mask

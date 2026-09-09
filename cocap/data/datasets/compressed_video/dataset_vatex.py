@@ -10,14 +10,17 @@ import random
 from collections import defaultdict
 from typing import Literal
 
-import torch
 from torch.utils import data
 from torchvision import transforms
 
-from cocap.modules.clip import clip
+from cocap.data.tokenizers import build_tokenizer
 from .transforms import (DictNormalize, DictCenterCrop, DictRandomHorizontalFlip)
 from .video_readers import VIDEO_READER_REGISTRY
 from .video_text_base import get_video, CVConfig
+
+# ImageNet statistics, as used by the CLIP-based baseline. SigLIP2 expects (0.5, 0.5, 0.5).
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
 def load_json(file_path):
@@ -38,6 +41,9 @@ class VATEXCaptioningDataset(data.Dataset):
             video_reader: str,
             cv_config: CVConfig,
             split: Literal["train", "test"],
+            tokenizer: str = "clip",
+            normalize_mean: tuple = IMAGENET_MEAN,
+            normalize_std: tuple = IMAGENET_STD,
     ):
         self.split = split
         self.video_root = video_root
@@ -47,6 +53,8 @@ class VATEXCaptioningDataset(data.Dataset):
         self.height, self.width = video_size
         self.sentences = []  # (vid, [sentence, ...])
         self.h265_cfg = cv_config
+        self.tokenizer_name = tokenizer
+        self._tokenizer = None  # built lazily so dataloader workers each get their own
         metadata = load_json(metadata)
 
         split_video_ids = metadata[split].copy()
@@ -66,7 +74,7 @@ class VATEXCaptioningDataset(data.Dataset):
         # self.sentences = self.sentences[:50000]
         self.video_reader = VIDEO_READER_REGISTRY.get(video_reader)
         # transforms
-        normalize = DictNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+        normalize = DictNormalize(mean=tuple(normalize_mean), std=tuple(normalize_std))
         if split == "train":
             self.transform = transforms.Compose([
                 DictCenterCrop((self.height, self.width)),
@@ -91,6 +99,12 @@ class VATEXCaptioningDataset(data.Dataset):
     def __len__(self):
         return len(self.sentences)
 
+    @property
+    def tokenizer(self):
+        if self._tokenizer is None:
+            self._tokenizer = build_tokenizer(self.tokenizer_name)
+        return self._tokenizer
+
     def _get_video_path(self, video_id):
         return os.path.join(self.video_root, f"{video_id}.mp4")
 
@@ -108,12 +122,9 @@ class VATEXCaptioningDataset(data.Dataset):
         video_id, sentence_list = self.sentences[idx]
         sentence = random.choice(sentence_list)
 
-        input_ids = clip.tokenize(sentence, context_length=self.max_words, truncate=True)[0]
-        input_mask = torch.zeros(self.max_words, dtype=torch.long)
-        input_mask[:len(clip._tokenizer.encode(sentence)) + 2] = 1
+        input_ids, input_mask, input_labels = self.tokenizer.encode(sentence, self.max_words)
 
         video, video_mask = self._get_video(video_id)
-        input_labels = torch.cat((input_ids[1:], torch.IntTensor([0])))
         return {
             # video
             "video": video,

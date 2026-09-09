@@ -17,9 +17,12 @@ from pytorch_lightning.utilities.types import OptimizerLRScheduler
 from torch.optim.lr_scheduler import LambdaLR
 
 from cocap.modules.bert import BertLayerNorm
-from cocap.modules.compressed_video import CompressedVideoCaptioner, compressed_video_captioner_pretrained_cfg
+from cocap.modules.compressed_video import (CompressedVideoCaptioner,
+                                            compressed_video_captioner_pretrained_cfg,
+                                            compressed_video_captioner_siglip_cfg,
+                                            compressed_video_captioner_siglip_gpt2_cfg)
 from .eval_captioning import evaluate
-from .loss import LossBase, label_smoothing_loss_cfg
+from .loss import LossBase, LabelSmoothingLoss, label_smoothing_loss_cfg
 from .optimization import BertAdam
 from ..utils.json import save_json
 from ..utils.train_utils import gather_object_multiple_gpu, get_timestamp
@@ -27,19 +30,34 @@ from ..utils.train_utils import gather_object_multiple_gpu, get_timestamp
 logger = logging.getLogger(__name__)
 
 
-def convert_ids_to_sentence(tokens):
-    from cocap.modules.clip.clip import _tokenizer
-    text = _tokenizer.decode(tokens)
-    text_list = text.split(" ")
-    new = []
-    for i in range(len(text_list)):
-        if i == 0:
-            new.append(text_list[i].split(">")[-1])
-        elif "<|endoftext|>" in text_list[i]:
-            break
-        else:
-            new.append(text_list[i])
-    return " ".join(new)
+def convert_ids_to_sentence(tokens, tokenizer: str = "clip"):
+    """Decode generated ids into a caption using the configured text tokenizer."""
+    from cocap.data.tokenizers import build_tokenizer
+
+    return build_tokenizer(tokenizer).decode(tokens)
+
+
+#: parameter prefixes carrying pretrained weights, per backbone/decoder choice. Anything matched
+#: here is excluded from weight decay and trained at its group's (lower) learning rate.
+CLIP_VISION_PREFIXES = [
+    "compressed_video_transformer.rgb_encoder.conv1",
+    "compressed_video_transformer.rgb_encoder.class_embedding",
+    "compressed_video_transformer.rgb_encoder.positional_embedding",
+    "compressed_video_transformer.rgb_encoder.ln_pre",
+    "compressed_video_transformer.rgb_encoder.transformer",
+    "compressed_video_transformer.rgb_encoder.ln_post",
+    "compressed_video_transformer.rgb_encoder.proj",
+]
+SIGLIP_VISION_PREFIXES = [
+    "compressed_video_transformer.rgb_encoder.model",
+]
+BERT_DECODER_PREFIXES = [
+    "caption_head.cap_sa_decoder.word_embeddings",
+    "caption_head.prediction_head.decoder",
+]
+GPT2_DECODER_PREFIXES = [
+    "caption_head.gpt2",
+]
 
 
 class CoCapLM(pl.LightningModule):
@@ -51,16 +69,40 @@ class CoCapLM(pl.LightningModule):
             loss: LossBase,
             lr: float = 1e-4,
             clip_lr: float = 1e-6,
+            decoder_lr: float = None,
             warmup_ratio: float = 0.05,
             lr_decay_gamma: float = 0.95,
+            tokenizer: str = "clip",
+            vision_pretrained_prefixes: list = None,
+            decoder_pretrained_prefixes: list = None,
     ):
+        """
+        :param lr: learning rate for randomly initialized parameters
+        :param clip_lr: learning rate for the pretrained vision backbone
+        :param decoder_lr: learning rate for pretrained decoder parameters; defaults to
+            ``clip_lr``, which reproduces the baseline where both sat in one group. A pretrained
+            LM decoder (GPT-2) usually wants something between ``clip_lr`` and ``lr``.
+        :param tokenizer: name of the text tokenizer, must match the dataset and caption head
+        :param vision_pretrained_prefixes: parameter prefixes of the pretrained vision backbone
+        :param decoder_pretrained_prefixes: parameter prefixes of pretrained decoder weights
+        """
         super().__init__()
         self.model = cocap_model
         self.loss = loss
         self.lr = lr
         self.clip_lr = clip_lr
+        self.decoder_lr = clip_lr if decoder_lr is None else decoder_lr
         self.warmup_ratio = warmup_ratio
         self.lr_decay_gamma = lr_decay_gamma
+        self.tokenizer_name = tokenizer
+        self.vision_pretrained_prefixes = (
+            list(CLIP_VISION_PREFIXES) if vision_pretrained_prefixes is None
+            else list(vision_pretrained_prefixes)
+        )
+        self.decoder_pretrained_prefixes = (
+            list(BERT_DECODER_PREFIXES) if decoder_pretrained_prefixes is None
+            else list(decoder_pretrained_prefixes)
+        )
 
         self.batch_res = None
 
@@ -80,17 +122,9 @@ class CoCapLM(pl.LightningModule):
         decay = set()
         no_decay = set()
 
-        pretrained_modules = [
-            "compressed_video_transformer.rgb_encoder.conv1",
-            "compressed_video_transformer.rgb_encoder.class_embedding",
-            "compressed_video_transformer.rgb_encoder.positional_embedding",
-            "compressed_video_transformer.rgb_encoder.ln_pre",
-            "compressed_video_transformer.rgb_encoder.transformer",
-            "compressed_video_transformer.rgb_encoder.ln_post",
-            "compressed_video_transformer.rgb_encoder.proj",
-            "caption_head.cap_sa_decoder.word_embeddings",
-            "caption_head.prediction_head.decoder",
-        ]
+        vision_prefixes = self.vision_pretrained_prefixes
+        decoder_prefixes = self.decoder_pretrained_prefixes
+        pretrained_modules = vision_prefixes + decoder_prefixes
         whitelist_weight_modules = (nn.Linear, nn.MultiheadAttention, nn.Conv2d)
         blacklist_weight_modules = (nn.LayerNorm, nn.BatchNorm2d, nn.Embedding, BertLayerNorm)
         for mn, m in model.named_modules():
@@ -112,33 +146,49 @@ class CoCapLM(pl.LightningModule):
 
         param_dict = {pn: p for pn, p in model.named_parameters()}
         inter_params = decay & no_decay
-        union_params = decay | no_decay
         assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
-        assert len(param_dict.keys() - union_params) == 0, \
-            "parameters %s were not separated into either decay/no_decay set!" % (
-                str(param_dict.keys() - union_params),)
 
-        pretrained_no_decay = [pn for pn in sorted(list(no_decay)) if
-                               any(pn.startswith(p_pn) for p_pn in pretrained_modules)]
-        not_pretrained_no_decay = [pn for pn in sorted(list(no_decay)) if
-                                   not any(pn.startswith(p_pn) for p_pn in pretrained_modules)]
+        # A swapped-in module may use layer types the rules above do not name (GPT-2's Conv1D,
+        # for instance). Fall back on tensor rank rather than failing, so a new backbone or
+        # decoder does not require editing this function.
+        unclassified = param_dict.keys() - (decay | no_decay)
+        if unclassified:
+            logger.warning("Parameters not matched by the decay rules, classified by rank: %s",
+                           "\n   " + "\n   ".join(sorted(unclassified)))
+            for fpn in unclassified:
+                (decay if param_dict[fpn].dim() >= 2 else no_decay).add(fpn)
+
+        def _matches(pn, prefixes):
+            return any(pn.startswith(p) for p in prefixes)
+
+        vision_no_decay = [pn for pn in sorted(no_decay) if _matches(pn, vision_prefixes)]
+        decoder_no_decay = [pn for pn in sorted(no_decay) if _matches(pn, decoder_prefixes)]
+        other_no_decay = [pn for pn in sorted(no_decay) if not _matches(pn, pretrained_modules)]
 
         logger.debug("Parameter group decay_param: %s",
-                     "\n   " + "\n   ".join([pn for pn in sorted(list(decay))]))
-        logger.debug("Parameter group no_decay_pretrained_param: %s",
-                     "\n   " + "\n   ".join([pn for pn in sorted(list(pretrained_no_decay))]))
+                     "\n   " + "\n   ".join(sorted(decay)))
+        logger.debug("Parameter group no_decay_vision_pretrained_param: %s",
+                     "\n   " + "\n   ".join(vision_no_decay))
+        logger.debug("Parameter group no_decay_decoder_pretrained_param: %s",
+                     "\n   " + "\n   ".join(decoder_no_decay))
         logger.debug("Parameter group no_decay_not_pretrained_param: %s",
-                     "\n   " + "\n   ".join([pn for pn in sorted(list(not_pretrained_no_decay))]))
+                     "\n   " + "\n   ".join(other_no_decay))
+        logger.info("Parameter groups: decay=%d, vision_pretrained=%d (lr=%g), "
+                    "decoder_pretrained=%d (lr=%g), other_no_decay=%d",
+                    len(decay), len(vision_no_decay), self.clip_lr,
+                    len(decoder_no_decay), self.decoder_lr, len(other_no_decay))
 
-        decay_param = [param_dict[pn] for pn in sorted(list(decay))]
-        no_decay_pretrained_param = [param_dict[pn] for pn in sorted(list(pretrained_no_decay))]
-        no_decay_not_pretrained_param = [param_dict[pn] for pn in sorted(list(not_pretrained_no_decay))]
+        def _params(names):
+            # frozen modules contribute no gradients; keep them out of the optimizer entirely
+            return [param_dict[pn] for pn in names if param_dict[pn].requires_grad]
 
         optimizer_grouped_parameters = [
-            {"params": decay_param},
-            {"params": no_decay_pretrained_param, "weight_decay": 0.0, "lr": self.clip_lr},
-            {"params": no_decay_not_pretrained_param, "weight_decay": 0.0}
+            {"params": _params(sorted(decay))},
+            {"params": _params(vision_no_decay), "weight_decay": 0.0, "lr": self.clip_lr},
+            {"params": _params(decoder_no_decay), "weight_decay": 0.0, "lr": self.decoder_lr},
+            {"params": _params(other_no_decay), "weight_decay": 0.0},
         ]
+        optimizer_grouped_parameters = [g for g in optimizer_grouped_parameters if g["params"]]
 
         optimizer = BertAdam(
             optimizer_grouped_parameters,
@@ -182,12 +232,13 @@ class CoCapLM(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         inputs_ids = batch["input_ids"]
         input_masks = batch["input_mask"]
-        max_t_len = self.model.caption_head.cap_config.max_t_len  # hard-code sentence length, for speed test, set it to 21
-        inputs_ids[:, :] = 0.
+        cap_config = self.model.caption_head.cap_config
+        max_t_len = cap_config.max_t_len  # hard-code sentence length, for speed test, set it to 21
+        inputs_ids[:, :] = cap_config.PAD_id
         input_masks[:, :] = 0.
         assert torch.sum(input_masks[:, :]) == 0, "Initially, all text tokens should be masked"
         bsz = len(inputs_ids)
-        next_symbols = torch.IntTensor([self.model.caption_head.cap_config.BOS_id] * bsz)  # (N, )
+        next_symbols = torch.IntTensor([cap_config.BOS_id] * bsz)  # (N, )
 
         warn_visual_output = False
         for dec_idx in range(max_t_len):
@@ -206,10 +257,14 @@ class CoCapLM(pl.LightningModule):
 
         for example_idx, (cur_gen_sen, cur_meta) in enumerate(zip(dec_seq, batch['metadata'][1])):
             cur_data = {
-                "sentence": convert_ids_to_sentence(cur_gen_sen.tolist()),
+                "sentence": convert_ids_to_sentence(cur_gen_sen.tolist(), self.tokenizer_name),
                 "gt_sentence": cur_meta
             }
-            self.batch_res["results"][batch['metadata'][0][example_idx].split("video")[-1]].append(cur_data)
+            # MSRVTT keys its references by the numeric id, having stripped the "video" prefix;
+            # other datasets key by the full id. removeprefix does the right thing for both,
+            # where split() would also cut ids that merely contain the word.
+            video_id = batch['metadata'][0][example_idx]
+            self.batch_res["results"][video_id.removeprefix("video")].append(cur_data)
 
     def on_validation_epoch_end(self) -> None:
         json_res = copy.deepcopy(self.batch_res)
@@ -240,3 +295,47 @@ cocap_lm_cfg = builds(
     loss=label_smoothing_loss_cfg,
     populate_full_signature=True
 )
+
+# Phase 4: SigLIP2 encoder + baseline BERT decoder. The text side is unchanged, so the CLIP
+# tokenizer and its 49408-entry vocabulary stay in place.
+cocap_lm_siglip_cfg = builds(
+    CoCapLM,
+    cocap_model=compressed_video_captioner_siglip_cfg,
+    loss=label_smoothing_loss_cfg,
+    tokenizer="clip",
+    vision_pretrained_prefixes=SIGLIP_VISION_PREFIXES,
+    decoder_pretrained_prefixes=BERT_DECODER_PREFIXES,
+    populate_full_signature=True
+)
+
+# Phase 5: SigLIP2 encoder + GPT-2 decoder. Switches the tokenizer, the vocabulary the loss is
+# built over, and the label padding convention (-100 instead of 0).
+cocap_lm_siglip_gpt2_cfg = builds(
+    CoCapLM,
+    cocap_model=compressed_video_captioner_siglip_gpt2_cfg,
+    loss=builds(LabelSmoothingLoss, target_vocab_size=50257, ignore_index=-100,
+                populate_full_signature=True),
+    tokenizer="gpt2",
+    vision_pretrained_prefixes=SIGLIP_VISION_PREFIXES,
+    decoder_pretrained_prefixes=GPT2_DECODER_PREFIXES,
+    populate_full_signature=True
+)
+
+#: name -> config for every selectable model variant
+MODEL_VARIANTS = {
+    "cocap": cocap_lm_cfg,
+    "cocap_siglip": cocap_lm_siglip_cfg,
+    "cocap_siglip_gpt2": cocap_lm_siglip_gpt2_cfg,
+}
+
+
+def register_model_configs(store):
+    """Register the model variants as the hydra `model` config group.
+
+    Lives here rather than in a script so anything that needs to build a model from an
+    experiment config (training, benchmarking, evaluation) registers the same group.
+    """
+    model_store = store(group="model")
+    for name, cfg in MODEL_VARIANTS.items():
+        model_store(cfg, name=name)
+    return store

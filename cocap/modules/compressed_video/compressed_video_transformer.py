@@ -14,6 +14,7 @@ __all__ = [
     "motion_encoder_cfg",
     "compressed_video_transformer_cfg",
     "compressed_video_transformer_pretrained_cfg",
+    "compressed_video_transformer_siglip_cfg",
 ]
 
 import logging
@@ -175,6 +176,8 @@ class CompressedVideoTransformer(nn.Module):
         self.residual_encoder = residual_encoder
         self.action_encoder = action_encoder
         self.output_dim = output_dim
+        # number of motion vector channels this model was built for, read off the encoder stem
+        self.motion_channels = motion_encoder.conv1.in_channels if motion_encoder is not None else 0
 
     def forward(
             self,
@@ -196,7 +199,11 @@ class CompressedVideoTransformer(nn.Module):
         assert iframe.size(0) == motion.size(0) == residual.size(0) == bp_type_ids.size(0), "batch size should be equal"
         assert iframe.size(1) == motion.size(1) == residual.size(1) == bp_type_ids.size(1), "n_gop should be equal"
         assert motion.size(2) == residual.size(2) == bp_type_ids.size(2), "n_mv and n_res should be equal"
-        assert iframe.size(2) == 3 and motion.size(3) == 4 and residual.size(3) == 3, "channel number is not correct"
+        # motion vector channels follow the encoder (4 for AVC as decoded, 2 when the L1/B-frame
+        # pair has been dropped), so check against the encoder rather than a hard-coded 4
+        assert iframe.size(2) == 3 and residual.size(3) == 3, "channel number is not correct"
+        assert motion.size(3) == self.motion_channels, \
+            f"motion has {motion.size(3)} channels, motion encoder expects {self.motion_channels}"
         assert iframe.size(3) == residual.size(4) and motion.size(4) == iframe.size(3) // 4, "height is not correct"
         assert iframe.size(4) == residual.size(5) and motion.size(5) == iframe.size(4) // 4, "width is not correct"
 
@@ -209,10 +216,11 @@ class CompressedVideoTransformer(nn.Module):
         )
         f_ctx_cls = einops.rearrange(f_ctx_cls, "(bsz n_gop) c->bsz n_gop c", bsz=_bsz)
         f_ctx_all_hidden = einops.rearrange(f_ctx_all_hidden, "(bsz n_gop) hw c->bsz n_gop hw c", bsz=_bsz)
-        iframe_attn = einops.rearrange(
-            iframe_attn, "n_layers (bsz n_gop) n_heads h w->n_layers bsz n_gop n_heads h w",
-            bsz=_bsz
-        )
+        if iframe_attn is not None:  # HuggingFace backbones do not expose per-layer attention maps
+            iframe_attn = einops.rearrange(
+                iframe_attn, "n_layers (bsz n_gop) n_heads h w->n_layers bsz n_gop n_heads h w",
+                bsz=_bsz
+            )
         # encode motion in batches
         mv_cls, mv_attn = self.motion_encoder(
             einops.rearrange(motion, "bsz n_gop n_bp c_mv h_4 w_4->(bsz n_gop n_bp) c_mv h_4 w_4"),
@@ -260,21 +268,83 @@ class CompressedVideoTransformer(nn.Module):
             pretrained_clip_name_or_path: str = "ViT-B/16",
             # motion encoder cfgs
             motion_patch_size: int = 8, motion_layers: int = 2, motion_heads: int = 8,
+            motion_channels: int = 4,
             # residual encoder cfgs
             residual_patch_size: int = 64, residual_layers: int = 2, residual_heads: int = 8,
             # action encoder cfgs
-            action_layers: int = 1, action_heads: int = 8, n_bp: int = 59
+            action_layers: int = 1, action_heads: int = 8, n_bp: int = 59, n_bp_type: int = 3
     ):
+        """
+        :param motion_channels: 4 keeps the raw AVC motion vector, 2 drops the L1 (B-frame only)
+            pair, which is identically zero for a stream encoded without B-frames.
+        :param n_bp_type: number of B/P type ids. 3 covers P (0), B (1) and padding (2); the
+            padding id is emitted by the reader's ``sample="pad"`` mode.
+        """
         rgb_encoder, image_resolution, vision_width, embed_dim = IFrameEncoder.from_pretrained(
             pretrained_clip_name_or_path
         )
+        return cls._assemble(
+            rgb_encoder, image_resolution, vision_width, embed_dim,
+            motion_patch_size=motion_patch_size, motion_layers=motion_layers,
+            motion_heads=motion_heads, motion_channels=motion_channels,
+            residual_patch_size=residual_patch_size, residual_layers=residual_layers,
+            residual_heads=residual_heads,
+            action_layers=action_layers, action_heads=action_heads,
+            n_bp=n_bp, n_bp_type=n_bp_type,
+        )
 
+    @classmethod
+    def from_siglip_pretrained(
+            cls,
+            # rgb encoder cfgs
+            pretrained_model_name_or_path: str = "google/siglip2-base-patch16-224",
+            freeze_backbone: bool = False,
+            backbone_gradient_checkpointing: bool = False,
+            # motion encoder cfgs
+            motion_patch_size: int = 8, motion_layers: int = 2, motion_heads: int = 8,
+            motion_channels: int = 2,
+            # residual encoder cfgs
+            residual_patch_size: int = 64, residual_layers: int = 2, residual_heads: int = 8,
+            # action encoder cfgs
+            action_layers: int = 1, action_heads: int = 8, n_bp: int = 59, n_bp_type: int = 3
+    ):
+        """Build the compressed-video transformer on a SigLIP2 I-frame backbone.
+
+        The motion and residual encoders stay randomly initialized, exactly as in the CLIP
+        variant — only the I-frame branch is pretrained.
+        """
+        from cocap.modules.siglip import SiglipIFrameEncoder
+
+        rgb_encoder, image_resolution, vision_width, embed_dim = SiglipIFrameEncoder.from_pretrained(
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            freeze=freeze_backbone,
+            gradient_checkpointing=backbone_gradient_checkpointing,
+        )
+        return cls._assemble(
+            rgb_encoder, image_resolution, vision_width, embed_dim,
+            motion_patch_size=motion_patch_size, motion_layers=motion_layers,
+            motion_heads=motion_heads, motion_channels=motion_channels,
+            residual_patch_size=residual_patch_size, residual_layers=residual_layers,
+            residual_heads=residual_heads,
+            action_layers=action_layers, action_heads=action_heads,
+            n_bp=n_bp, n_bp_type=n_bp_type,
+        )
+
+    @classmethod
+    def _assemble(
+            cls, rgb_encoder, image_resolution, vision_width, embed_dim,
+            *, motion_patch_size, motion_layers, motion_heads, motion_channels,
+            residual_patch_size, residual_layers, residual_heads,
+            action_layers, action_heads, n_bp, n_bp_type,
+    ):
+        """Attach the randomly initialized compressed-domain branches to a pretrained I-frame
+        encoder. Shared by the CLIP and SigLIP2 builders."""
         motion_encoder = VisionTransformer(
             input_resolution=image_resolution // 4,
             patch_size=motion_patch_size,
             width=vision_width // 4, layers=motion_layers, heads=motion_heads,
             output_dim=embed_dim,
-            in_channels=4
+            in_channels=motion_channels
         )
         residual_encoder = VisionTransformer(
             input_resolution=image_resolution,
@@ -284,7 +354,7 @@ class CompressedVideoTransformer(nn.Module):
             in_channels=3
         )
         action_encoder = ActionEncoder(
-            width=embed_dim, layers=action_layers, heads=action_heads, n_bp=n_bp, n_bp_type=2
+            width=embed_dim, layers=action_layers, heads=action_heads, n_bp=n_bp, n_bp_type=n_bp_type
         )
         return cls(
             rgb_encoder=rgb_encoder,
@@ -313,5 +383,9 @@ compressed_video_transformer_cfg = builds(
 )
 compressed_video_transformer_pretrained_cfg = builds(
     CompressedVideoTransformer.from_pretrained,
+    populate_full_signature=True
+)
+compressed_video_transformer_siglip_cfg = builds(
+    CompressedVideoTransformer.from_siglip_pretrained,
     populate_full_signature=True
 )

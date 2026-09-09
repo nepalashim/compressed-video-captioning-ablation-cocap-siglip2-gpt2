@@ -1,0 +1,41 @@
+# @package _global_
+#
+# Phase 5 — the full architecture change: SigLIP2 I-frame encoder + GPT-2 caption decoder.
+
+defaults:
+  - /model@model: cocap_siglip_gpt2
+  - /exp/train/vatex_subset_base
+  - _self_
+
+trainer:
+  default_root_dir: "./logs/vatex_subset_siglip_gpt2"
+
+train_dataloader:
+  dataset:
+    tokenizer: "gpt2"
+    normalize_mean: [0.5, 0.5, 0.5]
+    normalize_std: [0.5, 0.5, 0.5]
+val_dataloader:
+  dataset:
+    tokenizer: "gpt2"
+    normalize_mean: [0.5, 0.5, 0.5]
+    normalize_std: [0.5, 0.5, 0.5]
+
+model:
+  # A pretrained LM decoder wants a rate between the frozen-ish backbone and the fresh modules;
+  # 1e-4 destabilises GPT-2 on a 5k-clip training set.
+  decoder_lr: 5e-5
+  cocap_model:
+    compressed_video_transformer:
+      pretrained_model_name_or_path: "google/siglip2-base-patch16-224"
+      freeze_backbone: false
+      backbone_gradient_checkpointing: true
+      motion_channels: 2
+      n_bp: 59
+      n_bp_type: 3
+    caption_head:
+      pretrained_model_name_or_path: "gpt2"
+      visual_feature_size: 768     # SigLIP2-base width == GPT-2 n_embd, so the projection is 1:1
+      max_v_len: 16                # 2 * num_gop
+      max_t_len: 32                # matches the dataset's max_words
+      gradient_checkpointing: true

@@ -11,6 +11,8 @@ __all__ = [
     "caption_head_pretrained_cfg",
     "compressed_video_captioner_cfg",
     "compressed_video_captioner_pretrained_cfg",
+    "compressed_video_captioner_siglip_cfg",
+    "compressed_video_captioner_siglip_gpt2_cfg",
 ]
 
 import logging
@@ -27,7 +29,9 @@ from cocap.modules.bert import BertSelfEncoder, BertLMPredictionHead
 from cocap.modules.clip.clip import get_model_path
 from cocap.modules.clip.model import CLIP
 from cocap.modules.compressed_video.compressed_video_transformer import CompressedVideoTransformer, \
-    compressed_video_transformer_pretrained_cfg, compressed_video_transformer_cfg
+    compressed_video_transformer_pretrained_cfg, compressed_video_transformer_cfg, \
+    compressed_video_transformer_siglip_cfg
+from cocap.modules.gpt2.gpt2_caption_head import gpt2_caption_head_cfg
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +84,7 @@ class CaptionHead(nn.Module):
     @staticmethod
     @torch.no_grad()
     def ids2text(gt_ids: Union[np.ndarray, Tensor]):
-        from cocap.trainer.cocap_trainer import convert_ids_to_sentence
+        from cocap.modeling.lm_cocap import convert_ids_to_sentence
         if isinstance(gt_ids, np.ndarray) or isinstance(gt_ids, Tensor):
             assert 0 < len(gt_ids.shape) <= 2, f"gt_ids should be a 1 dim or 2 dim array/tensor, got {gt_ids.shape}"
         else:
@@ -125,8 +129,15 @@ class CaptionHead(nn.Module):
     def from_pretrained(
             cls,
             pretrained_clip_name_or_path: str = "ViT-B/16", max_v_len: int = 8 * 2, max_t_len: int = 77,
+            visual_feature_size: int = None,
             verbose: Optional[Union[int, bool]] = False
     ):
+        """
+        :param visual_feature_size: width of the visual features this head consumes. Defaults to
+            the CLIP embedding width, which is correct when the I-frame encoder is also CLIP.
+            Set it explicitly when pairing this decoder with a different vision backbone
+            (SigLIP2-base emits 768, CLIP ViT-B/16 emits 512).
+        """
         model_path = get_model_path(pretrained_clip_name_or_path, download_root="model_zoo/clip_model")
         pretrained_model: CLIP = torch.jit.load(model_path, map_location="cpu")
         state_dict = pretrained_model.state_dict()
@@ -137,7 +148,7 @@ class CaptionHead(nn.Module):
 
         head = cls(
             word_embedding_size=transformer_width,
-            visual_feature_size=embed_dim,
+            visual_feature_size=visual_feature_size or embed_dim,
             max_v_len=max_v_len,
             max_t_len=max_t_len,
             hidden_size=embed_dim,
@@ -224,5 +235,21 @@ compressed_video_captioner_pretrained_cfg = builds(
     CompressedVideoCaptioner,
     compressed_video_transformer=compressed_video_transformer_pretrained_cfg,
     caption_head=caption_head_pretrained_cfg,
+    populate_full_signature=True
+)
+
+# Phase 4: SigLIP2 I-frame encoder, baseline BERT-style decoder (isolates the encoder swap)
+compressed_video_captioner_siglip_cfg = builds(
+    CompressedVideoCaptioner,
+    compressed_video_transformer=compressed_video_transformer_siglip_cfg,
+    caption_head=caption_head_pretrained_cfg,
+    populate_full_signature=True
+)
+
+# Phase 5: SigLIP2 I-frame encoder + GPT-2 decoder (the full architecture change)
+compressed_video_captioner_siglip_gpt2_cfg = builds(
+    CompressedVideoCaptioner,
+    compressed_video_transformer=compressed_video_transformer_siglip_cfg,
+    caption_head=gpt2_caption_head_cfg,
     populate_full_signature=True
 )
