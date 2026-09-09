@@ -12,6 +12,10 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+#: paths the reader failed on in this process. Dataloader workers each keep their own list, so
+#: treat it as a sampling signal during validation rather than a global tally.
+GET_VIDEO_FAILURES: list = []
+
 
 def get_tokenized_words(sentence: str, tokenizer, max_words):
     words = tokenizer.tokenize(sentence)
@@ -107,18 +111,37 @@ class CVConfig:
     motion_channels: int = 4
 
 
-def get_video(video_reader, video_path, max_frames, sample, hevc_config: None | CVConfig = None):
+def get_video(video_reader, video_path, max_frames, sample, hevc_config: None | CVConfig = None,
+              strict: bool = False):
+    """
+    :param strict: raise if the reader failed. The compressed-domain reader returns all-zero
+        tensors on any error, which are indistinguishable from real data downstream, so a
+        corrupt or unreadable video would otherwise train silently as a black clip. Leave it
+        off to tolerate a few bad files, but never report numbers without checking how many
+        failed (``tools/validate_data_pipeline.py`` counts them).
+    """
     assert os.path.exists(video_path), f"Video file not found: {video_path}"
     video_mask = torch.ones((max_frames,), dtype=torch.int)
     if video_reader.__name__ in ["read_frames_compressed_domain"]:
         assert hevc_config is not None, "hevc_config should be set when using read_frames_compressed_domain"
-        video, _ = video_reader(video_path,
-                                resample_num_gop=hevc_config.num_gop, resample_num_mv=hevc_config.num_mv,
-                                resample_num_res=hevc_config.num_res,
-                                with_residual=hevc_config.with_residual,
-                                pre_extract=hevc_config.use_pre_extract,
-                                sample=hevc_config.sample if hevc_config.sample == "pad" else sample,
-                                motion_channels=getattr(hevc_config, "motion_channels", 4))
+        video, ok = video_reader(video_path,
+                                 resample_num_gop=hevc_config.num_gop, resample_num_mv=hevc_config.num_mv,
+                                 resample_num_res=hevc_config.num_res,
+                                 with_residual=hevc_config.with_residual,
+                                 pre_extract=hevc_config.use_pre_extract,
+                                 sample=hevc_config.sample if hevc_config.sample == "pad" else sample,
+                                 motion_channels=getattr(hevc_config, "motion_channels", 4))
     else:
+        # the RGB readers return sampled frame indices as their second value and raise on
+        # failure, so reaching here means success
         video, _ = video_reader(video_path, max_frames, sample)
+        ok = True
+
+    if not ok:
+        if strict:
+            raise RuntimeError(
+                f"Failed to read {video_path}; the reader returned zero tensors. See "
+                f"video_reader_error.log. Set strict=False to train through it."
+            )
+        GET_VIDEO_FAILURES.append(video_path)
     return video, video_mask

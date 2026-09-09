@@ -44,6 +44,7 @@ class VATEXCaptioningDataset(data.Dataset):
             tokenizer: str = "clip",
             normalize_mean: tuple = IMAGENET_MEAN,
             normalize_std: tuple = IMAGENET_STD,
+            strict_video_loading: bool = False,
     ):
         self.split = split
         self.video_root = video_root
@@ -55,6 +56,7 @@ class VATEXCaptioningDataset(data.Dataset):
         self.h265_cfg = cv_config
         self.tokenizer_name = tokenizer
         self._tokenizer = None  # built lazily so dataloader workers each get their own
+        self.strict_video_loading = strict_video_loading
         metadata = load_json(metadata)
 
         split_video_ids = metadata[split].copy()
@@ -113,7 +115,8 @@ class VATEXCaptioningDataset(data.Dataset):
                                       video_path=self._get_video_path(video_id),
                                       max_frames=self.max_frames,
                                       sample="rand" if self.split == "train" else "uniform",
-                                      hevc_config=self.h265_cfg)
+                                      hevc_config=self.h265_cfg,
+                                      strict=self.strict_video_loading)
         if self.transform is not None:
             video = self.transform(video)
         return video, video_mask

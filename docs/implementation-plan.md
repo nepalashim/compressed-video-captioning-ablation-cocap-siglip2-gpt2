@@ -62,7 +62,7 @@
 |---|---|---|
 | **L1** | **No pretraining for the motion and residual encoders** — they stay randomly initialized | Already true in the baseline ([compressed_video_transformer.py:272-285](../cocap/modules/compressed_video/compressed_video_transformer.py#L272)); only the I-frame encoder is pretrained. No change needed; do **not** add pretrained init for these. |
 | **L2** | **`keyint=60`, no I-frame preservation step, no re-encoding** | Verified already satisfied by the source data. `M = keyint - 1 = 59` → `num_mv = num_res = 59`. |
-| **L3** | **`num_gop = 8`** (as specified) | Data supplies ~5. The sampler duplicates GOP indices for ~98.5% of clips, and duplicates are *byte-identical* (GOP sampling happens after per-GOP B/P sampling). Costs ~60% extra encoder compute for no new information. Config-driven — `num_gop: 5` is the information-preserving alternative; flagged for a later ablation. |
+| **L3** | **`num_gop = 8`** (as specified) | **Measured**: `validate_data_pipeline.py` reports a **37.5% duplicated-GOP fraction** on the real clips — only ~5.0 of the 8 sampled GOPs are distinct, the rest byte-identical (GOP sampling happens after per-GOP B/P sampling, so duplicate indices yield identical tensors). Three of every eight I-frame/motion/residual encoder passes therefore produce features the model already has. `num_gop: 5` recovers that compute at no information cost; recommended before the runs that matter. |
 | **L4** | **No B-frames → motion vector `4×56×56` becomes `2×56×56`** | Source already has `B=0`, so no re-encode. `cv_reader` still returns 4 channels for AVC (`[dx_L0, dy_L0, dx_L1, dy_L1]`); channels `2:4` are dead. Slice to the first 2 in the reader; `motion_encoder.in_channels = 2`; relax the `== 4` assertions to a configurable `motion_channels`. `bp_type_ids` are then all `0` (P). **Verify the channel layout once `cv_reader` is built** — assertion + a one-off dump is in `tools/verify_motion_channels.py`. |
 | **L5** | **No AGDTR module** | Out of scope for this iteration. Not implemented, not stubbed. Revisit later. |
 | **L6** | **Training batch size = 12** | Interpreted as the **effective/optimization** batch. On 8 GB, per-device batch must be 1–2 (the residual tensor alone is `12×8×59×3×224×224` = 852 MB uint8 → 3.4 GB fp32). Use `batch_size: 2` + `accumulate_grad_batches: 6` (= 12). On a stronger GPU, raise `batch_size` and lower accumulation to keep the product at 12. |
@@ -225,9 +225,45 @@ model: { lr: 1e-4, clip_lr: 1e-6, warmup_ratio: 0.1 }
 Also set `max_v_len = num_gop * 2` (= 16 visual tokens) and `max_t_len = max_words` on the caption head so the decoder's expected visual length tracks `num_gop`.
 
 ### 2.4 Gate
-- [ ] `prepare_vatex_subset.py` runs; counts reconcile (5000/1000, ~60k rows)
-- [ ] `python -c "from cocap...VATEXSubsetCaptioningDataset; ds=...; print(ds[0]['video']['iframe'].shape)"` → `(4,3,224,224)`, `motion_vector (4,29,4,56,56)`, `residual (4,29,3,224,224)`
-- [ ] no rows in `video_reader_error.log` after iterating the whole train set once (`tools/check_video_integrity.py` first, then a full `__getitem__` sweep)
+- [x] `prepare_vatex_subset.py` runs; counts reconcile (4999/1000, 59990 rows — 2 ids dropped, §0)
+- [x] shapes verified end to end via `tools/validate_data_pipeline.py --fake-reader`
+- [ ] the same command **without** `--fake-reader`, over the whole train split, once `cv_reader` exists
+
+### 2.5 Validating without `cv_reader`
+
+`tools/validate_data_pipeline.py` walks real video files through the dataset, the transforms,
+collation and (with `--build-model`) the model and loss. `--fake-reader` swaps in
+`cocap/data/datasets/compressed_video/fake_cv_reader.py`, which takes **picture types and frame
+indices from the real files via PyAV** and synthesises only the motion-vector and residual
+*values*. That exercises every piece of logic that does not live inside the native module: GOP
+grouping, the `len(g) > 2` filter, B/P sampling, GOP sampling, the motion-channel slice, padding
+and masks, the dict transforms, and the model's dimension asserts.
+
+Result on the real clips (both variants, `--build-model`):
+
+```
+expected  : iframe (8,3,224,224)  motion (8,59,2,56,56)  residual (8,59,3,224,224)
+reader failures (all-zero I-frames) : 0
+duplicated GOP fraction             : 37.5%   -> only ~5.0 of 8 GOPs are distinct
+no shape/dtype/label problems found
+baseline    prediction_scores (2,32,49408)  loss 292.2
+siglip_gpt2 prediction_scores (2,32,50257)  loss 187.2
+```
+
+Any number produced with `--fake-reader` is meaningless; the stub logs a warning and sets
+`cv_reader.IS_FAKE`. It exists to de-risk the pipeline, not to produce results.
+
+### 2.6 The reader's silent failure mode
+
+`read_frames_compressed_domain` catches every exception and returns **all-zero tensors** with a
+`False` success flag — and `get_video` used to discard that flag, so an unreadable video became
+a black clip that trained silently. For a paper this is a correctness landmine: a few percent of
+silently-black clips would degrade every metric with no visible cause.
+
+Now: the flag is propagated, failures are logged (`logger.warning`, not `print`) and recorded in
+`video_text_base.GET_VIDEO_FAILURES`, `get_video(strict=True)` raises instead, and
+`validate_data_pipeline.py` counts all-zero I-frames explicitly. **Check that count is 0 before
+trusting any run.**
 
 ---
 

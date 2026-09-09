@@ -323,9 +323,12 @@ def read_frames_compressed_domain(
         logger.debug(timer.get_info(averaged=False))  # debug output about speed
         return ret, True
     except Exception:  # TODO: too broad exception
-        print(f"video load error: {video_path}")
-        traceback.print_exc()
-        traceback.print_exc(file=open("video_reader_error.log", "a"))
+        # The dummy tensors below are all zeros. If the caller ignores the `False` success flag
+        # these silently become training data, so `get_video` promotes this to a warning it can
+        # count, or to an exception under strict=True.
+        logger.warning("video load error, returning zero tensors: %s", video_path, exc_info=True)
+        with open("video_reader_error.log", "a") as f:
+            traceback.print_exc(file=f)
         # create a dummy return data
         ret = {
             "iframe": torch.zeros((resample_num_gop, 3, 224, 224), dtype=torch.float),
