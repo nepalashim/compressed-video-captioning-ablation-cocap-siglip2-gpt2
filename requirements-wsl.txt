@@ -25,7 +25,9 @@ accelerate
 
 # --- video / compressed domain -------------------------------------------------------------
 # decord 0.6.0 has no wheels beyond CPython 3.10; eva-decord is the maintained fork that does.
-# setup_wsl.sh tries decord first and falls back. cv_reader is NOT on PyPI - build it from
+# If neither resolves on your interpreter, decord is only used to fetch I-frames by index and to
+# read video length, so it is replaceable - say so and we swap it for PyAV.
+# cv_reader is NOT on PyPI - build it from
 # https://github.com/yaojie-shen/Compressed-Video-Reader (see docs/implementation-plan.md 1.4).
 decord==0.6.0; python_version < "3.11"
 eva-decord>=0.6.1; python_version >= "3.11"

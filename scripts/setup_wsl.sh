@@ -10,7 +10,6 @@
 set -euo pipefail
 
 CUDA_CHANNEL="${CUDA_CHANNEL:-cu124}"      # cu124 suits an Ada GPU on a recent driver
-PYTHON_BIN="${PYTHON_BIN:-python3.11}"     # 3.11/3.12; avoid 3.13 for native-build friendliness
 VENV_DIR="${VENV_DIR:-.venv-wsl}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -18,6 +17,20 @@ step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 warn() { printf '\033[1;33mWARN: %s\033[0m\n' "$1"; }
 
 cd "$REPO_ROOT"
+
+# Pick an interpreter the distro actually ships, newest first but stopping short of 3.13, whose
+# native-extension wheel coverage is still patchy for this dependency set. Ubuntu 24.04 has 3.12,
+# 22.04 has 3.10; asking for a version the distro lacks fails at apt rather than here.
+if [ -z "${PYTHON_BIN:-}" ]; then
+    for candidate in python3.12 python3.11 python3.10; do
+        if apt-cache show "$candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    done
+    PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
+echo "Using interpreter: ${PYTHON_BIN}"
 
 # --------------------------------------------------------------------------------------------
 step "System packages"
