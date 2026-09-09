@@ -40,6 +40,9 @@ trainer:
   # accumulate_grad_batches, keeping the product at 12.
   accumulate_grad_batches: 6
   max_epochs: 30
+  # The inherited base sets -1, which runs the *entire* 1000-clip validation set - each with
+  # 32-step greedy decoding - before training starts. Two batches is what a sanity check is for.
+  num_sanity_val_steps: 2
 
 model:
   lr: 1e-4

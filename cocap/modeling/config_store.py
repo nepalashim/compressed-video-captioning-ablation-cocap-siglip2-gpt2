@@ -14,6 +14,7 @@ __all__ = ["train", "register_configs"]
 import logging
 
 import pytorch_lightning as pl
+import torch
 from hydra_zen import builds
 from omegaconf import MISSING
 from torch.utils.data import DataLoader
@@ -27,8 +28,18 @@ def train(
         model: pl.LightningModule,
         train_dataloader: DataLoader,
         val_dataloader: DataLoader,
-        trainer: pl.Trainer
+        trainer: pl.Trainer,
+        matmul_precision: str = "high",
 ):
+    """
+    :param matmul_precision: float32 matmul precision. "high" lets Ampere/Ada cards use their
+        Tensor Cores for fp32 matmuls, which is a substantial speedup for a small precision
+        cost. Set "highest" to disable it. Keep this the same across every run being compared,
+        since it does perturb numerics.
+    """
+    if matmul_precision:
+        torch.set_float32_matmul_precision(matmul_precision)
+        logger.info("float32 matmul precision: %s", matmul_precision)
     trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
 
 
