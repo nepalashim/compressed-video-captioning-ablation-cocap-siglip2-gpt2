@@ -20,28 +20,35 @@ def test_cvt_from_pretrained():
     print(model)
 
 
+# Shape/wiring checks only, so batch size just multiplies memory. At batch 5 the motion and
+# residual tensors together are ~2.6 GB, and with autograd recording it is enough to trigger the
+# OOM killer on a laptop.
+BSZ = 1
+
+
+def _fake_inputs():
+    return dict(
+        iframe=torch.rand(BSZ, 8, 3, 224, 224),
+        motion=torch.rand(BSZ, 8, 59, 4, 56, 56),
+        residual=torch.rand(BSZ, 8, 59, 3, 224, 224),
+        bp_type_ids=torch.randint(0, 1, (BSZ, 8, 59)),
+    )
+
+
+@torch.no_grad()
 def test_cvt_forward():
     model = CompressedVideoTransformer.from_pretrained()
 
-    output = model(
-        iframe=torch.rand(5, 8, 3, 224, 224),
-        motion=torch.rand(5, 8, 59, 4, 56, 56),
-        residual=torch.rand(5, 8, 59, 3, 224, 224),
-        bp_type_ids=torch.randint(0, 1, (5, 8, 59))
-    )
+    output = model(**_fake_inputs())
     for k, v in output.items():
         print(k, v.shape)
 
 
+@torch.no_grad()
 def test_cvt_forward_instantiate():
     model = instantiate(compressed_video_transformer_pretrained_cfg)
 
-    output = model(
-        iframe=torch.rand(5, 8, 3, 224, 224),
-        motion=torch.rand(5, 8, 59, 4, 56, 56),
-        residual=torch.rand(5, 8, 59, 3, 224, 224),
-        bp_type_ids=torch.randint(0, 1, (5, 8, 59))
-    )
+    output = model(**_fake_inputs())
     for k, v in output.items():
         print(k, v.shape)
 

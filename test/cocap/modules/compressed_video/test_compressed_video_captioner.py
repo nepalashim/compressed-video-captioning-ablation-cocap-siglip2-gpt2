@@ -12,19 +12,28 @@ from pytest import main
 from cocap.modules.compressed_video.compressed_video_captioner import *
 
 
+# These are shape/wiring checks, so the batch size only multiplies memory. At batch 8 the
+# residual tensor alone is 8*8*59*3*224*224 int64 = ~4.5 GB before the float conversion, which
+# is enough to trigger the OOM killer on a laptop.
+BSZ = 1
+
+
+@torch.no_grad()
 def test_forward():
     model = instantiate(compressed_video_captioner_pretrained_cfg)
 
     outputs = model(
         {
             "video": {
-                "iframe": torch.randn(8, 8, 3, 224, 224),
-                "motion_vector": torch.randn(8, 8, 59, 4, 56, 56),
-                "residual": torch.randint(0, 255, size=(8, 8, 59, 3, 224, 224)),
-                "type_ids_mv": torch.randint(0, 1, size=(8, 8, 59))
+                "iframe": torch.randn(BSZ, 8, 3, 224, 224),
+                "motion_vector": torch.randn(BSZ, 8, 59, 4, 56, 56),
+                # uint8 matches what the dataset actually produces
+                "residual": torch.randint(0, 255, size=(BSZ, 8, 59, 3, 224, 224),
+                                          dtype=torch.uint8),
+                "type_ids_mv": torch.randint(0, 1, size=(BSZ, 8, 59))
             },
-            "input_ids": torch.randint(0, 1000, size=(8, 77)),
-            "input_mask": torch.ones((8, 77), dtype=torch.long),
+            "input_ids": torch.randint(0, 1000, size=(BSZ, 77)),
+            "input_mask": torch.ones((BSZ, 77), dtype=torch.long),
         }
     )
     print(outputs["prediction_scores"].shape)
