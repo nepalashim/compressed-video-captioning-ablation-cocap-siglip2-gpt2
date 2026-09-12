@@ -37,7 +37,7 @@ VARIANTS = {
 }
 
 
-def compose(variant: str):
+def compose(variant: str, overrides=None):
     from hydra import compose as hydra_compose, initialize_config_dir
     from hydra_zen import store
 
@@ -47,7 +47,7 @@ def compose(variant: str):
     store.add_to_hydra_store(overwrite_ok=True)
     config_dir = (Path(__file__).parent.parent / "configs").resolve()
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        return hydra_compose(config_name=VARIANTS[variant])
+        return hydra_compose(config_name=VARIANTS[variant], overrides=list(overrides or []))
 
 
 def main():
@@ -61,7 +61,14 @@ def main():
                         help="use the synthetic cv_reader stand-in (development only)")
     parser.add_argument("--build-model", action="store_true",
                         help="also instantiate the model and run one forward pass on a batch")
-    args = parser.parse_args()
+    # trailing key=value arguments are forwarded to hydra, so the same config groups training
+    # uses can be validated here: `budget=laptop_8gb reader=pre_extract`
+    args, overrides = parser.parse_known_args()
+
+    malformed = [a for a in overrides if "=" not in a]
+    if malformed:
+        parser.error(f"unrecognized arguments: {' '.join(malformed)}\n"
+                     f"(hydra overrides must be key=value, e.g. budget=laptop_8gb)")
 
     if args.fake_reader:
         from cocap.data.datasets.compressed_video.fake_cv_reader import install
@@ -72,7 +79,9 @@ def main():
 
     from cocap.data.datasets.compressed_video import video_text_base
 
-    cfg = compose(args.variant)
+    cfg = compose(args.variant, overrides)
+    if overrides:
+        print(f"overrides : {' '.join(overrides)}")
     ds_cfg = cfg.train_dataloader.dataset if args.split == "train" else cfg.val_dataloader.dataset
     dataset = instantiate(ds_cfg)
 
@@ -85,7 +94,8 @@ def main():
     print(f"dataset   : {len(dataset)} samples")
     print(f"expected  : iframe ({n_gop},3,{res_h},{res_w})  motion ({n_gop},{n_bp},{mc},"
           f"{res_h // 4},{res_w // 4})  residual ({n_gop},{n_bp},3,{res_h},{res_w})")
-    print(f"cv_reader : {'FAKE (synthetic mv/residual)' if args.fake_reader else 'real'}")
+    print(f"cv_reader : {'FAKE (synthetic mv/residual)' if args.fake_reader else 'real'}"
+          f"   pre_extract: {bool(cv.get('use_pre_extract', False))}")
     print()
 
     n = min(args.num_samples, len(dataset))

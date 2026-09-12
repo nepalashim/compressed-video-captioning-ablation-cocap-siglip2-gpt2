@@ -38,7 +38,7 @@ VARIANTS = {
 }
 
 
-def build(variant: str):
+def build(variant: str, overrides=None):
     """Instantiate exactly the model an experiment config would train, so the timing reflects
     the real thing rather than a hand-built approximation."""
     from hydra_zen import store
@@ -50,7 +50,7 @@ def build(variant: str):
     store.add_to_hydra_store(overwrite_ok=True)
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(config_name=VARIANTS[variant])
+        cfg = compose(config_name=VARIANTS[variant], overrides=list(overrides or []))
     lm = instantiate(cfg.model)
     cv = OmegaConf.to_container(cfg.train_dataloader.dataset.cv_config)
     return lm.model, cv, cfg.train_dataloader.dataset.max_words
@@ -133,10 +133,15 @@ def main():
                         help="the paper reports batch size 1")
     parser.add_argument("-n", "--num_iters", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=3)
-    args = parser.parse_args()
+    # trailing key=value arguments are forwarded to hydra, so latency can be measured at the
+    # same budget training used: `budget=laptop_8gb`
+    args, overrides = parser.parse_known_args()
+    malformed = [a for a in overrides if '=' not in a]
+    if malformed:
+        parser.error(f"unrecognized arguments: {' '.join(malformed)}")
 
     device = torch.device(args.device)
-    model, cv, max_words = build(args.variant)
+    model, cv, max_words = build(args.variant, overrides)
     model = model.to(device).eval()
 
     max_t_len = model.caption_head.cap_config.max_t_len
