@@ -162,10 +162,13 @@ def main():
 
     videos = sorted(os.path.join(args.video_dir, f)
                     for f in os.listdir(args.video_dir) if f.endswith(".mp4"))
-    if args.limit:
-        videos = videos[:args.limit]
     if not videos:
         sys.exit(f"no .mp4 files in {args.video_dir}")
+    # keep the full count: --limit exists to size up the whole directory from a sample, so the
+    # projection has to be against every clip, not just the ones processed
+    n_in_dir = len(videos)
+    if args.limit:
+        videos = videos[:args.limit]
 
     todo = videos if args.overwrite else [v for v in videos if not is_complete(v)]
     already = len(videos) - len(todo)
@@ -177,6 +180,8 @@ def main():
         joblib.delayed(extract_one)(v, args.quality, args.overwrite) for v in todo
     )
 
+    import time
+    started = time.perf_counter()
     total_bytes, failures = 0, []
     for video_path, ok, size, error in tqdm.tqdm(runner, total=len(todo), dynamic_ncols=True,
                                                  desc="extracting"):
@@ -185,14 +190,19 @@ def main():
         else:
             failures.append((video_path, error))
 
+    elapsed = time.perf_counter() - started
     done = len(todo) - len(failures)
     print()
     if done:
         per_clip = total_bytes / done
         print(f"extracted    : {done} clips, {total_bytes / 1e9:.2f} GB "
               f"({per_clip / 1e6:.1f} MB/clip)")
-        print(f"projected    : {per_clip * len(videos) / 1e9:.1f} GB for all {len(videos)} clips "
-              f"in this directory")
+        print(f"projected    : {per_clip * n_in_dir / 1e9:.1f} GB for all {n_in_dir} clips "
+              f"in {args.video_dir}")
+        if args.limit and done:
+            rate = done / max(elapsed, 1e-9)
+            print(f"             : ~{n_in_dir / rate / 60:.0f} min to do all {n_in_dir} "
+                  f"at the observed {rate:.1f} clips/s")
     if failures:
         print(f"FAILED       : {len(failures)} clips")
         for video_path, error in failures[:5]:
