@@ -11,7 +11,7 @@ defaults:
   - /reader: decode
 
 trainer:
-  default_root_dir: "./logs/vatex_subset_siglip"
+  default_root_dir: "./logs/vatex_subset_siglip_seed${seed}"
 
 # SigLIP normalizes with mean = std = 0.5, not the ImageNet statistics the CLIP baseline uses.
 train_dataloader:

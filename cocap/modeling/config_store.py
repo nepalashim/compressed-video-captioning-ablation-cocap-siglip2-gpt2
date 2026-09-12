@@ -24,22 +24,46 @@ from .lm_cocap import register_model_configs
 logger = logging.getLogger(__name__)
 
 
+def seed_from_config(cfg):
+    """Seed every RNG *before* hydra instantiates anything.
+
+    Registered as ``zen``'s ``pre_call``, because by the time ``train`` runs the model has
+    already been built and its randomly-initialized weights drawn. Seeding there would cover
+    data order and dropout but not initialization, which is the opposite of reproducible.
+
+    ``workers=True`` extends the seed to dataloader workers, which matters here: the per-GOP
+    B/P frame sampling and the choice of which of a video's 10 captions to use both happen
+    inside the workers.
+    """
+    seed = getattr(cfg, "seed", None)
+    if seed is None:
+        logger.warning("no seed configured; this run is not reproducible")
+        return
+    pl.seed_everything(int(seed), workers=True)
+    logger.info("seeded everything with %d (workers included)", int(seed))
+
+
 def train(
         model: pl.LightningModule,
         train_dataloader: DataLoader,
         val_dataloader: DataLoader,
         trainer: pl.Trainer,
         matmul_precision: str = "high",
+        seed: int = 42,
 ):
     """
     :param matmul_precision: float32 matmul precision. "high" lets Ampere/Ada cards use their
         Tensor Cores for fp32 matmuls, which is a substantial speedup for a small precision
         cost. Set "highest" to disable it. Keep this the same across every run being compared,
         since it does perturb numerics.
+    :param seed: consumed by :func:`seed_from_config` before instantiation; declared here so it
+        appears in the config and is recorded with the run. Vary it to measure run-to-run
+        spread, which is what decides whether a difference between variants is real.
     """
     if matmul_precision:
         torch.set_float32_matmul_precision(matmul_precision)
         logger.info("float32 matmul precision: %s", matmul_precision)
+    logger.info("seed: %s", seed)
     trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
 
 

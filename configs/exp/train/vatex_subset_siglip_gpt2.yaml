@@ -10,7 +10,7 @@ defaults:
   - /reader: decode
 
 trainer:
-  default_root_dir: "./logs/vatex_subset_siglip_gpt2"
+  default_root_dir: "./logs/vatex_subset_siglip_gpt2_seed${seed}"
 
 train_dataloader:
   dataset:

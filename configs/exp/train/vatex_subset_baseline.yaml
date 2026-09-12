@@ -11,7 +11,7 @@ defaults:
   - /reader: decode
 
 trainer:
-  default_root_dir: "./logs/vatex_subset_baseline"
+  default_root_dir: "./logs/vatex_subset_baseline_seed${seed}"
 
 model:
   cocap_model:
