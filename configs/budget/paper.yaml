@@ -1,0 +1,35 @@
+# @package _global_
+#
+# The paper's sampling budget: N=8 GOPs, M=59 motion vectors and residuals per GOP.
+#
+# Needs roughly 24 GB of VRAM. On 8 GB it pins memory at 7710/8188 MiB and PyTorch's allocator
+# thrashes - nvidia-smi shows 100% utilisation at 29 W of an 89 W budget, i.e. stalling rather
+# than computing, and an epoch projects to ~6.5 days. Use `budget=laptop_8gb` there.
+#
+# Selected by default; override with `budget=laptop_8gb` on the command line.
+
+train_dataloader:
+  dataset:
+    cv_config:
+      num_gop: 8
+      num_mv: 59
+      num_res: 59
+  batch_size: 2
+
+val_dataloader:
+  dataset:
+    cv_config:
+      num_gop: 8
+      num_mv: 59
+      num_res: 59
+  batch_size: 2
+
+trainer:
+  accumulate_grad_batches: 6      # 2 x 6 = effective batch 12
+
+model:
+  cocap_model:
+    compressed_video_transformer:
+      n_bp: 59                    # must equal cv_config.num_mv
+    caption_head:
+      max_v_len: 16               # must equal 2 * num_gop

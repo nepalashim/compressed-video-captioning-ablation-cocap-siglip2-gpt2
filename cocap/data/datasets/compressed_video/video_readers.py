@@ -166,7 +166,11 @@ def read_frames_compressed_domain(
     assert sample in {"rand", "uniform", "pad"}
     try:
         timer = Timer()
-        reader = decord.VideoReader(video_path, num_threads=1)
+        # Opened lazily: with pre_extract the I-frames come from the cache, so there is no need
+        # to open the container at all - and doing it per sample costs real time over an epoch.
+        reader = None
+        if not (with_bp_rgb or pre_extract):
+            reader = decord.VideoReader(video_path, num_threads=1)
         timer("check_video_length")
         # load data from video file/pre-extracted feature
         if not pre_extract:

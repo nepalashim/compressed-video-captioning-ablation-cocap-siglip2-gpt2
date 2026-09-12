@@ -1,0 +1,19 @@
+# @package _global_
+#
+# Parse the H.264 stream on every sample (the default, and what the upstream code does).
+#
+# Costs a full cv_reader decode per sample. With `unfold_sentences: True` each clip carries 10
+# captions, so a 12-epoch run decodes every clip ~120 times. Fine when the GPU is the
+# bottleneck; wasteful once it is not.
+#
+# Switch with `reader=pre_extract` after running tools/pre_extract.py.
+
+train_dataloader:
+  dataset:
+    cv_config:
+      use_pre_extract: false
+
+val_dataloader:
+  dataset:
+    cv_config:
+      use_pre_extract: false

@@ -234,19 +234,100 @@ decides whether the KV-cache work is worth doing.
 
 ---
 
+## 10.5 Choose a compute budget, and pre-extract
+
+Two orthogonal switches control cost. Both are config groups, so they compose:
+
+```bash
+python tools/train_net.py --config-name=exp/train/vatex_subset_baseline \
+    budget=laptop_8gb reader=pre_extract
+```
+
+### `budget=` — how much of each clip the model sees
+
+| | `paper` (default) | `laptop_8gb` |
+|---|---|---|
+| `num_gop` | 8 | 5 |
+| `num_mv` / `num_res` | 59 | 16 |
+| residual images per batch | **944** | **160** |
+| needs | ≥ 24 GB VRAM | 8 GB |
+
+On an 8 GB card `budget=paper` pins VRAM at 7710/8188 MiB and PyTorch's allocator thrashes —
+`nvidia-smi` shows 100% utilisation at **29 W of an 89 W budget**, i.e. stalling rather than
+computing. Measured throughput was **0.04 it/s, ~6.5 days per epoch**.
+
+`num_gop: 5` is free: 35% of the 8 sampled GOPs were measured as byte-identical duplicates, and
+the clips only hold ~5 GOPs anyway. `num_mv/num_res: 16` is a genuine reduction — 16 of each
+GOP's 59 B/P frames, **resampled at random every epoch**, so the model still sees the whole GOP
+across training. It applies identically to every variant, so the comparisons that carry the
+paper's claim stay internally valid.
+
+### `reader=` — whether to re-decode video on every sample
+
+`reader=decode` (default) runs a full `cv_reader` parse per sample. With `unfold_sentences: True`
+each clip carries 10 captions, so a 12-epoch run decodes **every clip ~120 times**.
+
+`tools/pre_extract.py` does that parse once and caches the result next to each clip as four
+files (`.pict_type`, `.rgb_gop`, `.motion_vector`, `.residual`).
+
+**Measure the storage cost before committing to the full set** — it is the one real downside:
+
+```bash
+python tools/pre_extract.py --video_dir "$VATEX_SUBSET_ROOT/train" --limit 20 --workers 4
+```
+
+It prints `MB/clip` and a projection for the whole directory. If that projection fits your disk,
+run it for real (one-off, resumable, skips clips already done):
+
+```bash
+python tools/pre_extract.py --video_dir "$VATEX_SUBSET_ROOT/train" --workers 6
+python tools/pre_extract.py --video_dir "$VATEX_SUBSET_ROOT/val"   --workers 6
+```
+
+Then **verify before training** — a missing or partial cache makes the reader return all-zero
+tensors rather than failing:
+
+```bash
+python tools/validate_data_pipeline.py --variant baseline -n 50 --build-model \
+    reader=pre_extract 2>/dev/null || \
+python tools/validate_data_pipeline.py --variant baseline -n 50 --build-model
+```
+
+The line that matters is **`reader failures (all-zero I-frames) : 0`**.
+
+`--quality 75` trades a little residual fidelity for disk if the projection is too large; the
+default is 85, which is effectively lossless on residuals since they are mostly flat.
+
+### Which bottleneck are you actually hitting?
+
+These two switches fix *different* problems, and it is worth knowing which one you have. Compare
+the sanity-check rate against the training rate — same dataloader, same decoding on both sides:
+
+```
+Sanity Checking  500/500  2.23it/s   <- 4.46 samples/s through the data pipeline
+Epoch 0          0.04it/s            <- 0.08 samples/s
+```
+
+A gap that large means the **training step** is the limit, not decoding — so `budget` is what
+helps and `reader` will not move the needle. If instead the two rates are close and `nvidia-smi`
+shows the GPU idling, decoding is the limit and `reader=pre_extract` is the fix.
+
+---
+
 ## 11. First training run — the baseline
 
 This is the number everything else is measured against, so run it first and run it properly.
 
 ```bash
-python tools/train_net.py --config-name=exp/train/vatex_subset_baseline
+python tools/train_net.py --config-name=exp/train/vatex_subset_baseline     budget=laptop_8gb reader=pre_extract
 ```
 
-Watch the first few minutes for:
+Runs 12 epochs. Watch the first few minutes for:
 - **OOM** → lower `train_dataloader.batch_size` to 1 and raise `trainer.accumulate_grad_batches`
   to 12, keeping the product at 12
+- **VRAM near the 8 GB ceiling** → the allocator will thrash; see §10.5
 - **dataloader starvation** (GPU idle) → raise `num_workers`
-- loss decreasing
+- loss decreasing, and `it/s` read at ~300 iterations rather than at 10
 
 Then:
 ```bash

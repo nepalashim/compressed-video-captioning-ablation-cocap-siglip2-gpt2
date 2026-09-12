@@ -6,6 +6,8 @@ defaults:
   - /model@model: cocap_siglip_gpt2
   - /exp/train/vatex_subset_base
   - _self_
+  - /budget: paper
+  - /reader: decode
 
 trainer:
   default_root_dir: "./logs/vatex_subset_siglip_gpt2"
@@ -31,11 +33,9 @@ model:
       freeze_backbone: false
       backbone_gradient_checkpointing: true
       motion_channels: 2
-      n_bp: 59
       n_bp_type: 3
     caption_head:
       pretrained_model_name_or_path: "gpt2"
       visual_feature_size: 768     # SigLIP2-base width == GPT-2 n_embd, so the projection is 1:1
-      max_v_len: 16                # 2 * num_gop
       max_t_len: 32                # matches the dataset's max_words
       gradient_checkpointing: true

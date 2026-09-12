@@ -1,0 +1,22 @@
+# @package _global_
+#
+# Read compressed-domain features from the cache written by tools/pre_extract.py instead of
+# re-parsing the H.264 stream on every sample.
+#
+# Requires the cache to exist next to the clips:
+#
+#     python tools/pre_extract.py --video_dir "$VATEX_SUBSET_ROOT/train" --workers 6
+#     python tools/pre_extract.py --video_dir "$VATEX_SUBSET_ROOT/val"   --workers 6
+#
+# Without it every sample fails and the reader silently returns all-zero tensors, so check
+# `reader failures (all-zero I-frames) : 0` from validate_data_pipeline.py before training.
+
+train_dataloader:
+  dataset:
+    cv_config:
+      use_pre_extract: true
+
+val_dataloader:
+  dataset:
+    cv_config:
+      use_pre_extract: true

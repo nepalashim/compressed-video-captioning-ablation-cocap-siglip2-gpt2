@@ -1,0 +1,47 @@
+# @package _global_
+#
+# Reduced sampling budget that fits an 8 GB card (RTX 4070 Laptop and similar).
+#
+# Two changes, with very different justifications:
+#
+#   num_gop 8 -> 5      Free. Measured twice on the real clips: 35% of the 8 sampled GOPs are
+#                       byte-identical duplicates, because GOP sampling happens after per-GOP
+#                       B/P sampling, so duplicate indices yield identical tensors. The clips
+#                       only contain ~5 GOPs (median), so 8 buys nothing at all.
+#
+#   num_mv/res 59 -> 16 A real reduction. 16 of each GOP's 59 B/P frames, resampled at random
+#                       every epoch (`sample: "rand"`), so the model still sees the whole GOP
+#                       across training - just not in a single forward pass.
+#
+# Together that is 2x5x16 = 160 residual images per batch instead of 2x8x59 = 944, a 5.9x cut.
+# Applied identically to every variant, so baseline-vs-SigLIP2 and BERT-vs-GPT-2 comparisons
+# stay internally valid. What it forfeits is comparison against the paper's absolute numbers -
+# which was already off the table, since this trains on 4,999 videos rather than ~26,000.
+#
+# Use `budget=paper` on a >=24 GB card. See docs/remote-gpu.md.
+
+train_dataloader:
+  dataset:
+    cv_config:
+      num_gop: 5
+      num_mv: 16
+      num_res: 16
+  batch_size: 2
+
+val_dataloader:
+  dataset:
+    cv_config:
+      num_gop: 5
+      num_mv: 16
+      num_res: 16
+  batch_size: 2
+
+trainer:
+  accumulate_grad_batches: 6      # 2 x 6 = effective batch 12
+
+model:
+  cocap_model:
+    compressed_video_transformer:
+      n_bp: 16                    # must equal cv_config.num_mv
+    caption_head:
+      max_v_len: 10               # must equal 2 * num_gop

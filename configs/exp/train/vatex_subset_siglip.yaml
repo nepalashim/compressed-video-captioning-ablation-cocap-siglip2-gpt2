@@ -7,6 +7,8 @@ defaults:
   - /model@model: cocap_siglip
   - /exp/train/vatex_subset_base
   - _self_
+  - /budget: paper
+  - /reader: decode
 
 trainer:
   default_root_dir: "./logs/vatex_subset_siglip"
@@ -28,10 +30,8 @@ model:
       freeze_backbone: false
       backbone_gradient_checkpointing: true   # 8 GB: trade compute for activation memory
       motion_channels: 2
-      n_bp: 59
       n_bp_type: 3
     caption_head:
       pretrained_clip_name_or_path: "ViT-B/16"  # decoder side is unchanged
       visual_feature_size: 768                  # SigLIP2-base width, was 512 under CLIP
-      max_v_len: 16
       max_t_len: 32
