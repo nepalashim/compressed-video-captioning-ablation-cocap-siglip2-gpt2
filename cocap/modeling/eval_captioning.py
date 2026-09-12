@@ -88,17 +88,37 @@ class EvalCap:
 
 
 def evaluate(submission, reference):
-    tokenizer = PTBTokenizer  # for English
-    annos = reference
-    data = submission['results']
-    rests = []
-    for name, value in data.items():
-        rests.append({'image_id': str(name), 'caption': value[0]['sentence']})
-    eval_cap = EvalCap(annos, rests, tokenizer)
+    """Score generated captions against the references.
 
+    Only the videos present in *both* are scored. The scorers assert that prediction and
+    reference keys match exactly, so a partial pass over the validation set - Lightning's
+    sanity check, or `limit_val_batches` - would otherwise fail with a bare AssertionError
+    rather than simply scoring what it has.
+    """
+    tokenizer = PTBTokenizer  # for English
+    data = submission['results']
+
+    rests = [{'image_id': str(name), 'caption': value[0]['sentence']}
+             for name, value in data.items()]
+    predicted = {r['image_id'] for r in rests}
+    annos = {str(k): v for k, v in reference.items() if str(k) in predicted}
+
+    unknown = predicted - set(annos)
+    if unknown:
+        # a prediction whose id is not in the references cannot be scored; if this fires for
+        # more than a handful, the id conventions of the two sides have diverged
+        logger.warning("%d predicted ids are absent from the references and will be skipped "
+                       "(e.g. %s)", len(unknown), sorted(unknown)[:3])
+        rests = [r for r in rests if r['image_id'] in annos]
+
+    if not rests:
+        logger.warning("nothing to score: no predicted id matched a reference")
+        return {}
+    if len(annos) < len(reference):
+        logger.info("scoring %d of %d validation videos (partial pass)",
+                    len(annos), len(reference))
+
+    eval_cap = EvalCap(annos, rests, tokenizer)
     eval_cap.evaluate()
 
-    all_score = {}
-    for metric, score in eval_cap.eval.items():
-        all_score[metric] = score
-    return all_score
+    return dict(eval_cap.eval)

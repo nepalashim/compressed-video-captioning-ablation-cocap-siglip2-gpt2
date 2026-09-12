@@ -283,7 +283,12 @@ class CoCapLM(pl.LightningModule):
         if not dist.is_initialized() or dist.get_rank() == 0:
             json_ref = self.trainer.val_dataloaders.dataset.json_ref
             metrics = evaluate(json_res, json_ref)
-            self.log_dict(metrics, on_step=False, on_epoch=True, logger=True)
+            if metrics:
+                self.log_dict(metrics, on_step=False, on_epoch=True, logger=True)
+            else:
+                # logging nothing would leave a monitored checkpoint callback looking for a key
+                # that never appears, so say so plainly instead
+                logger.warning("no caption metrics were produced for this validation epoch")
 
         if dist.is_initialized():
             dist.barrier()
