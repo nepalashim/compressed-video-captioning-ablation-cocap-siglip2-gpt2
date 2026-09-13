@@ -127,9 +127,18 @@ class CoCapLM(pl.LightningModule):
         pretrained_modules = vision_prefixes + decoder_prefixes
         whitelist_weight_modules = (nn.Linear, nn.MultiheadAttention, nn.Conv2d)
         blacklist_weight_modules = (nn.LayerNorm, nn.BatchNorm2d, nn.Embedding, BertLayerNorm)
+
+        # Built before the walk below, because it is also the authority on which names are real.
+        # named_parameters deduplicates tied weights, whereas named_modules reaches the same
+        # tensor under every path it is bound to: GPT-2 ties lm_head to the token embedding, so
+        # the walk would otherwise collect caption_head.gpt2.lm_head.weight, which has no entry.
+        param_dict = {pn: p for pn, p in model.named_parameters()}
+
         for mn, m in model.named_modules():
             for pn, p in m.named_parameters():
                 fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
+                if fpn not in param_dict:  # alias of a tied weight; counted under its own name
+                    continue
 
                 if any(fpn.startswith(p_fpn) for p_fpn in pretrained_modules):  # pretrained
                     no_decay.add(fpn)
@@ -144,7 +153,6 @@ class CoCapLM(pl.LightningModule):
                 elif pn.endswith("weight") and isinstance(m, blacklist_weight_modules):
                     no_decay.add(fpn)
 
-        param_dict = {pn: p for pn, p in model.named_parameters()}
         inter_params = decay & no_decay
         assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
 

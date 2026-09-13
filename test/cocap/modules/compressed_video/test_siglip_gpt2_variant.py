@@ -6,6 +6,8 @@
 These do not need `cv_reader`: the compressed-domain tensors are synthesised directly.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -136,3 +138,59 @@ def test_gpt2_head_rejects_wrong_visual_length(siglip_transformer):
     }
     with pytest.raises(AssertionError, match="visual tokens"):
         head(visual, input_ids.unsqueeze(0).repeat(BSZ, 1), input_mask.unsqueeze(0).repeat(BSZ, 1))
+
+
+def test_tied_lm_head_is_not_a_separate_parameter():
+    """GPT-2 ties its output head to the token embedding.
+
+    ``named_modules`` reaches that one tensor under both ``transformer.wte.weight`` and
+    ``lm_head.weight``, while ``named_parameters`` reports it once. Optimizer grouping walks the
+    former and looks up in the latter, so it has to skip the alias or it raises KeyError on a
+    name that does not exist.
+    """
+    head = GPT2CaptionHead(visual_feature_size=768, max_v_len=N_GOP * 2, max_t_len=MAX_T)
+
+    from_modules = {f"{mn}.{pn}" if mn else pn
+                    for mn, m in head.named_modules()
+                    for pn, _ in m.named_parameters()}
+    from_parameters = set(dict(head.named_parameters()))
+
+    aliases = from_modules - from_parameters
+    assert "gpt2.lm_head.weight" in aliases, (
+        "expected the tied output head to appear as an alias; if GPT-2 stops tying its weights "
+        "this test is obsolete, but the guard in configure_optimizers is then also unnecessary"
+    )
+    # and the tensor really is shared, not merely similarly named
+    assert head.gpt2.lm_head.weight is head.gpt2.transformer.wte.weight
+
+
+def test_optimizer_groups_survive_tied_weights(siglip_transformer):
+    """The regression this guards: building parameter groups for the GPT-2 variant."""
+    from cocap.modeling.lm_cocap import (CoCapLM, GPT2_DECODER_PREFIXES,
+                                         SIGLIP_VISION_PREFIXES)
+    from cocap.modeling.loss import LabelSmoothingLoss
+
+    head = GPT2CaptionHead(visual_feature_size=siglip_transformer.output_dim,
+                           max_v_len=N_GOP * 2, max_t_len=MAX_T)
+    lm = CoCapLM(
+        cocap_model=CompressedVideoCaptioner(compressed_video_transformer=siglip_transformer,
+                                             caption_head=head),
+        loss=LabelSmoothingLoss(target_vocab_size=50257, ignore_index=-100),
+        tokenizer="gpt2",
+        vision_pretrained_prefixes=SIGLIP_VISION_PREFIXES,
+        decoder_pretrained_prefixes=GPT2_DECODER_PREFIXES,
+    )
+
+    # configure_optimizers reads trainer state to size the warmup, so stand one in
+    lm._trainer = SimpleNamespace(estimated_stepping_batches=1000, max_epochs=12)
+
+    config = lm.configure_optimizers()   # raised KeyError on the tied lm_head before the fix
+
+    groups = config["optimizer"].param_groups
+    assert groups, "expected at least one non-empty parameter group"
+
+    # every parameter requiring a gradient is optimized exactly once, tied weights included
+    grouped = [id(p) for g in groups for p in g["params"]]
+    expected = {id(p) for p in lm.model.parameters() if p.requires_grad}
+    assert len(grouped) == len(set(grouped)), "a parameter was placed in two groups"
+    assert set(grouped) == expected, "not every trainable parameter reached the optimizer"
