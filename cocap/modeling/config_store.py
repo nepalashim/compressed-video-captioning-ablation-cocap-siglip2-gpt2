@@ -50,6 +50,7 @@ def train(
         trainer: pl.Trainer,
         matmul_precision: str = "high",
         seed: int = 42,
+        ckpt_path: str = None,
 ):
     """
     :param matmul_precision: float32 matmul precision. "high" lets Ampere/Ada cards use their
@@ -59,12 +60,20 @@ def train(
     :param seed: consumed by :func:`seed_from_config` before instantiation; declared here so it
         appears in the config and is recorded with the run. Vary it to measure run-to-run
         spread, which is what decides whether a difference between variants is real.
+    :param ckpt_path: resume from this checkpoint, restoring weights, optimizer state, LR
+        schedule and epoch counter. This is an argument to ``fit``, not to the Trainer, so
+        ``trainer.ckpt_path=...`` does not work - pass it at the top level::
+
+            ckpt_path=logs/<run>/lightning_logs/version_N/checkpoints/epoch07.ckpt
     """
     if matmul_precision:
         torch.set_float32_matmul_precision(matmul_precision)
         logger.info("float32 matmul precision: %s", matmul_precision)
     logger.info("seed: %s", seed)
-    trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+    if ckpt_path:
+        logger.info("resuming from %s", ckpt_path)
+    trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader,
+                ckpt_path=ckpt_path)
 
 
 def register_configs(store):
