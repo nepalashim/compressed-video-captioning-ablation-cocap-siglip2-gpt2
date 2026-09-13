@@ -180,8 +180,13 @@ To resume after a preemption:
 
 ```bash
 python tools/train_net.py --config-name=exp/train/vatex_subset_baseline \
-    +trainer.ckpt_path=logs/vatex_subset_baseline/checkpoints/last.ckpt
+    budget=laptop_8gb reader=pre_extract \n    ckpt_path=logs/vatex_subset_baseline_seed42/lightning_logs/version_0/checkpoints/epoch07.ckpt
 ```
+
+`ckpt_path` is an argument to `fit`, not to the Trainer, so `trainer.ckpt_path=...` is
+silently ignored. Checkpoints are nested under
+`logs/<run>_seed<N>/lightning_logs/version_<V>/checkpoints/`. Resuming restores weights,
+optimizer state, the LR schedule and the epoch counter.
 
 **On spot/interruptible instances** (which is what $0.30/hr usually buys) assume you *will* be
 preempted. Checkpoint resume is not optional there.
