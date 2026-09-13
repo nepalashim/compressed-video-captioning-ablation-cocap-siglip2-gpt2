@@ -80,6 +80,25 @@ CIDEr. Worth one sentence in the paper so the choice is explicit.
 
 Full curve recorded in `docs/checking-results.md`.
 
+### Training loss is NOT comparable across variants
+The GPT-2 run shows loss ~141 where the baseline showed ~250-300 at the same iteration.
+**This says nothing about caption quality.** Three reasons:
+
+1. Different vocabularies (50257 vs 49408), so label smoothing spreads differently.
+2. The loss sums over valid tokens (reduction="sum"), and the two tokenizers split
+   the same caption into different numbers of tokens.
+3. GPT-2 begins as a trained language model, so its LM loss starts far lower whether or
+   not it is using the visual input at all.
+
+Only CIDEr / BLEU-4 / METEOR / ROUGE-L are comparable. Do not plot the loss curves together
+in the paper, and do not cite the loss as evidence of anything.
+
+### Lightning eval-mode warning is benign
+`Found 323 module(s) in eval mode at the start of training` appears for the HuggingFace
+variants. `from_pretrained` returns models in eval mode and Lightning inspects before calling
+`.train()`. Verified: afterwards zero modules remain in eval and all 37 GPT-2 dropout layers
+are active at p=0.1. No action needed, but have the answer ready.
+
 ### Latency
 CoCap's central claim is speed. Report `tools/benchmark_latency.py` numbers for all three
 variants **on the same GPU as the accuracy numbers**. Preliminary CPU measurement suggested
