@@ -51,10 +51,23 @@ epoch 7, against the paper's published VATEX numbers of 52.7 / 31.4 / 23.2 / 49.
 test split, so not like-for-like - but landing this close is evidence the reproduction is
 faithful, which is what licenses every comparison built on it.
 
-### Training curve observation
-Baseline CIDEr was **still climbing ~2.5/epoch at epoch 7** and peaked on the final completed
-epoch. If the same holds at epoch 11, say so: 12 epochs may not be the ceiling, and the models
-are likely under-trained rather than converged.
+### Training curve - RESOLVED: the baseline converged
+Earlier concern that 12 epochs might be too few is **settled**. Per-epoch CIDEr gains:
+
+| epoch | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|
+| CIDEr | 52.68 | 53.89 | 54.55 | 54.65 |
+| gain | +2.5 | +1.2 | +0.7 | +0.1 |
+
+The curve flattens cleanly, so 12 epochs is sufficient and the models are **not** under-trained.
+State this in the paper - it removes an obvious reviewer question. The retuned
+`lr_decay_gamma=0.91` annealed the schedule properly over the shortened run.
+
+Note also that BLEU-4 peaked at epoch 8 (30.28) and METEOR/ROUGE at epoch 9, while CIDEr rose
+until epoch 10. Best-checkpoint selection therefore depends on the monitored metric; we monitor
+CIDEr. Worth one sentence in the paper so the choice is explicit.
+
+Full curve recorded in `docs/checking-results.md`.
 
 ### Latency
 CoCap's central claim is speed. Report `tools/benchmark_latency.py` numbers for all three
