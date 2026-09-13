@@ -180,7 +180,8 @@ To resume after a preemption:
 
 ```bash
 python tools/train_net.py --config-name=exp/train/vatex_subset_baseline \
-    budget=laptop_8gb reader=pre_extract \n    ckpt_path=logs/vatex_subset_baseline_seed42/lightning_logs/version_0/checkpoints/epoch07.ckpt
+    budget=laptop_8gb reader=pre_extract \r
+    ckpt_path=logs/vatex_subset_baseline_seed42/lightning_logs/version_0/checkpoints/epoch07.ckpt
 ```
 
 `ckpt_path` is an argument to `fit`, not to the Trainer, so `trainer.ckpt_path=...` is
