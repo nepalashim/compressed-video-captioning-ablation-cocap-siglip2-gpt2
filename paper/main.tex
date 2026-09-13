@@ -1,0 +1,364 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage[margin=0.85in]{geometry}
+\usepackage{times}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,calc}
+\usepackage{xcolor}
+
+% Every unfilled item goes through \TODO, so `grep TODO` finds all of them before submission.
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+% Provisional numbers, to be re-checked against the final run.
+\newcommand{\num}[1]{\textcolor{red}{#1}}
+
+\title{\Large\bf Modernising the Compressed-Domain Video Captioner:\\
+A Controlled Study of SigLIP2 and GPT-2 Substitutions}
+
+\author{
+Ashim Nepal\\
+Department of Computer Engineering, Pulchowk Campus\\
+Institute of Engineering, Tribhuvan University, Nepal\\
+{\tt\small official.nepalashim@gmail.com}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Compressed-domain video captioning avoids full video decoding by operating directly on I-frames,
+motion vectors and residuals, trading a small amount of accuracy for a large gain in inference
+speed. CoCap~\cite{cocap} established this pipeline using a CLIP vision encoder and a shallow
+BERT-style multimodal decoder. Both components predate substantially stronger alternatives. We
+ask a narrow, controlled question: how much of CoCap's accuracy is limited by these two
+components, and which of the two is the binding constraint?
+
+We replace the CLIP I-frame encoder with SigLIP2 and the BERT-style decoder with GPT-2, and
+evaluate three configurations---the original pairing, the encoder substitution alone, and both
+substitutions together---under identical data, sampling budget and optimisation schedule. All
+comparisons are made against our own reproduction of CoCap rather than its published numbers,
+because we train on a 4,999-clip subset of VATEX at a reduced sampling budget; absolute values
+are therefore not comparable with the original work.
+
+Our reproduction attains \num{52.68} CIDEr against the published 52.7, supporting its fidelity.
+\TODO{one-sentence summary of the result once the three runs complete} We additionally report
+inference latency for each configuration, since speed is the property that motivates
+compressed-domain captioning in the first place, and an accuracy gain purchased at a latency
+cost should be reported as such.
+\end{abstract}
+
+%---------------------------------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+Video captioning systems conventionally decode a video, sample frames, extract 2D and 3D
+features, and only then generate text. CoCap~\cite{cocap} removes the decoding and offline
+feature-extraction stages entirely by consuming the compressed bitstream: the I-frame supplies
+appearance, while motion vectors and residuals---already computed by the video encoder---supply
+motion. The result runs roughly $2\times$ faster than the fastest prior end-to-end method while
+remaining competitive on accuracy.
+
+That architecture fixes two choices that have since been superseded. The I-frame encoder is
+CLIP~\cite{clip}; SigLIP2~\cite{siglip2} has since demonstrated stronger transfer at comparable
+cost. The caption decoder is a two-layer BERT-style~\cite{bert} block trained from scratch apart
+from its word embeddings, where a pretrained language model is the obvious modern alternative.
+
+Substituting either component is straightforward. What is not obvious is \emph{which}
+substitution matters, and whether the answer survives the compressed-domain constraints---a
+single I-frame per Group of Pictures, motion vectors at quarter resolution. The visual signal
+reaching the decoder here is far sparser than in a frame-based captioner, and it is not
+self-evident that a larger decoder can exploit it.
+
+This paper is deliberately narrow in scope. We contribute:
+
+\begin{enumerate}\itemsep2pt
+\item A documented reproduction of CoCap on VATEX, reaching \num{52.68} CIDEr against the
+      published 52.7, together with the source-level fixes the original release requires on a
+      current toolchain (Appendix~\ref{sec:repro}).
+\item A controlled attribution study over three configurations---CLIP+BERT, SigLIP2+BERT,
+      SigLIP2+GPT-2---sharing data, sampling budget, schedule and evaluation, isolating the
+      contribution of each substitution.
+\item A latency analysis reporting the speed consequence of each substitution alongside its
+      accuracy effect.
+\item Two empirical observations about the compressed-domain input pipeline that affect anyone
+      reproducing this line of work: the GOP sampling budget in the original configuration draws
+      a substantial fraction of duplicate GOPs on short clips (Section~\ref{sec:gop}), and half
+      the motion-vector channels carry no information on B-frame-free streams
+      (Section~\ref{sec:mv}).
+\end{enumerate}
+
+We make no claim of improving on CoCap as published. Our training set is roughly one fifth the
+size, our evaluation split is a subset, and our sampling budget is reduced; the only valid
+comparison is internal, against our own reproduction under identical conditions.
+
+%---------------------------------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+
+\TODO{Compressed-domain vision: CoViAR, MM-ViT, MVCGC, ATTP}
+
+\TODO{Video captioning: HMN, ORG-TRL, SGN, SwinBERT, MV-GPT, TextKG}
+
+\TODO{Vision-language encoders (CLIP, SigLIP, SigLIP2) and pretrained decoders for captioning}
+
+%---------------------------------------------------------------------------------------------
+\section{Method}
+\label{sec:method}
+
+\begin{figure*}[t]
+\centering
+\resizebox{0.95\textwidth}{!}{\input{figures/architecture}}
+\caption{The captioner with both substitutions applied. Highlighted blocks are the components we
+replace; the remainder follows CoCap~\cite{cocap}. Per Group of Pictures, one I-frame is encoded
+by SigLIP2 and $M$ motion-vector/residual pairs by two lightweight, randomly initialised Vision
+Transformers. The action encoder fuses them, using the motion features as queries against the
+I-frame's patch tokens. The resulting per-GOP context and action features form a visual prefix
+for a causal GPT-2 decoder.}
+\label{fig:arch}
+\end{figure*}
+
+We retain CoCap's structure and change two components. Section~\ref{sec:prelim} summarises what
+is inherited; Sections~\ref{sec:siglip} and~\ref{sec:gpt2} describe the substitutions.
+
+\subsection{Preliminaries: the compressed-domain captioner}
+\label{sec:prelim}
+
+An H.264 stream is a sequence of Groups of Pictures (GOPs), each beginning with an intra-coded
+I-frame $\mathcal{I}_{I}$ followed by inter-coded frames carrying a motion-vector field
+$\mathcal{I}_{mv}$ and a residual $\Delta_{res}$. Sampling $N$ GOPs and $M$ inter-coded frames
+per GOP, the model encodes
+\begin{equation}
+\mathcal{F}^{(m,n)}_{\mathrm{BP}} =
+  \mathrm{Enc}_{mv}\!\left(\mathcal{I}^{(m,n)}_{mv}\right) +
+  \mathrm{Enc}_{res}\!\left(\Delta^{(m,n)}_{res}\right),
+\end{equation}
+and an action encoder fuses these with the I-frame representation, using the motion features as
+queries against the I-frame's spatial tokens so that motion is grounded in appearance. Mean
+pooling yields a per-GOP action feature $\mathcal{F}^{(n)}_{\mathrm{act}}$, concatenated with the
+per-GOP context feature to form the visual representation
+$\mathcal{V} = [\mathcal{F}^{(n)}_{\mathrm{ctx}}, \mathcal{F}^{(n)}_{\mathrm{act}}]$.
+The motion and residual encoders are randomly initialised; only the I-frame encoder is
+pretrained. We leave all of this unchanged.
+
+\subsection{SigLIP2 I-frame encoder}
+\label{sec:siglip}
+
+CLIP's Vision Transformer prepends a \texttt{[CLS]} token whose projected output CoCap uses as
+the per-GOP context feature, with the remaining patch tokens serving as cross-attention memory
+for the action encoder. SigLIP2~\cite{siglip2} has no \texttt{[CLS]} token: it terminates in a
+multi-head attention pooling head in which a single learned probe attends over the patch tokens.
+We therefore take the pooled probe output as the context feature and the post-layer-normalised
+patch tokens as cross-attention memory, preserving both roles.
+
+At \texttt{patch16-224} resolution the two encoders emit the same number of patch tokens (196),
+so the action encoder is structurally unchanged. The representation width moves from CLIP's
+512-dimensional projected space to SigLIP2's 768, which propagates to the action encoder and the
+decoder interface. Input normalisation changes from ImageNet statistics to SigLIP's
+$\mu = \sigma = 0.5$.
+
+\subsection{GPT-2 caption decoder}
+\label{sec:gpt2}
+
+CoCap's decoder concatenates the visual tokens with the caption tokens and applies a shifted
+causal mask, so that every text position attends to the complete visual representation and to
+preceding text only. This is precisely GPT-2's native attention pattern, which makes the
+substitution a prefix-LM rather than a re-architecture: we project the visual tokens into GPT-2's
+embedding space, prepend them to the caption's word embeddings, and let the pretrained causal
+mask do the rest. A learned type embedding distinguishes context from action tokens and is
+zero-initialised, so the head begins as an unmodified GPT-2.
+
+The substitution replaces the CLIP byte-pair vocabulary with GPT-2's. Because GPT-2 has no
+dedicated padding token---\texttt{endoftext} serves as both sequence terminator and
+pad---padded positions cannot be identified by token identifier, and supervision instead masks
+them with $-100$ in the label tensor. SigLIP2-base's width of 768 matches GPT-2's embedding width
+exactly, so the visual projection is dimension-preserving.
+
+%---------------------------------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Data}
+
+We use a 4,999/1,000 clip train/validation subset of VATEX~\cite{vatex}, with ten English
+captions per clip. Two clip identifiers in the source annotation map to a single video file with
+no recoverable correspondence; both are discarded rather than paired with a video that may not
+match. Clips arrive already encoded as H.264 at 240 pixels on the short edge with
+\texttt{KeyInt} of 60 and no B-frames, so no re-encoding is performed.
+
+\subsection{Deviations from the published configuration}
+\label{sec:deviations}
+
+Table~\ref{tab:deviations} lists every respect in which our setup departs from
+CoCap~\cite{cocap}. These are why absolute numbers here cannot be compared with the published
+results. Each deviation is applied identically to all three configurations, so the internal
+comparison that carries our conclusions is unaffected.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrr}
+\toprule
+ & This work & CoCap~\cite{cocap} \\
+\midrule
+Training clips             & 4{,}999 & 25{,}991 \\
+Evaluation clips           & 1{,}000 & full test split \\
+GOPs per clip ($N$)        & 5 & 8 \\
+Frames per GOP ($M$)       & 16 & 59 \\
+Motion-vector channels     & 2 & 4 \\
+Epochs                     & 12 & 20 \\
+Batch size                 & 12 & 64 \\
+\bottomrule
+\end{tabular}
+\caption{Deviations from the published configuration, applied uniformly across all three
+variants. Sections~\ref{sec:gop} and~\ref{sec:mv} justify the sampling reductions empirically.}
+\label{tab:deviations}
+\end{table}
+
+\subsubsection{GOP sampling budget}
+\label{sec:gop}
+
+CoCap samples $N = 8$ GOPs per clip. VATEX clips are approximately ten seconds, which at
+\texttt{KeyInt} of 60 yields a median of five GOPs. Because GOP sampling occurs after the
+per-GOP frame sampling, requesting more GOPs than a clip contains yields byte-identical
+duplicates. We measure a 35\% duplicate fraction at $N = 8$ and 0\% at $N = 5$. Reducing $N$ to
+five therefore costs no information: it removes duplicated visual tokens from the decoder's
+input, and the corresponding redundant encoder passes.
+
+\subsubsection{Motion-vector channels}
+\label{sec:mv}
+
+The compressed-domain reader returns four motion-vector channels for H.264, laid out as
+$[\delta x_{L0}, \delta y_{L0}, \delta x_{L1}, \delta y_{L1}]$, where the $L1$ pair references
+future frames and is populated only by B-frames. Our clips contain none: across 20 clips and
+5{,}605 motion-carrying frames we observe only I- and P-frames, and the per-channel maximum
+absolute values are $[253, 125, 0, 0]$. The $L1$ pair is therefore identically zero and is
+discarded, halving the motion tensor at no information cost.
+
+\subsubsection{Frames per GOP}
+
+The reduction from $M = 59$ to $M = 16$ is a genuine loss of per-forward-pass information,
+imposed by an 8\,GB memory budget. At $N = 8$, $M = 59$ the residual tensor alone comprises 944
+images of $224^2$ per batch; memory occupancy reaches 7{,}710 of 8{,}188\,MiB and throughput
+collapses to 0.04 iterations per second. Because the sampler re-draws each epoch, the model
+still observes the full GOP over the course of training, but sees only a subset within any
+single forward pass.
+
+\subsection{Implementation}
+
+\TODO{optimiser, learning-rate schedule, warmup, label smoothing, hardware, per-epoch
+wall-clock time}
+
+%---------------------------------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\subsection{Reproduction fidelity}
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+& B4 & M & R & C \\
+\midrule
+CoCap, published~\cite{cocap} & 31.4 & 23.2 & 49.4 & 52.7 \\
+Our reproduction              & \num{30.0} & \num{22.9} & \num{48.9} & \num{52.7} \\
+\bottomrule
+\end{tabular}
+\caption{Our CoCap reproduction against the published VATEX result. The evaluation splits differ
+(Section~\ref{sec:deviations}), so this indicates fidelity rather than being a like-for-like
+comparison.}
+\label{tab:repro}
+\end{table}
+
+\TODO{update Table~\ref{tab:repro} with the final epoch-11 numbers}
+
+\subsection{Attribution}
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llrrrr}
+\toprule
+Encoder & Decoder & B4 & M & R & C \\
+\midrule
+CLIP    & BERT  & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+SigLIP2 & BERT  & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+SigLIP2 & GPT-2 & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+\bottomrule
+\end{tabular}
+\caption{Attribution over the two substitutions, under identical data, sampling budget and
+schedule. Single seed throughout; see Section~\ref{sec:limitations}.}
+\label{tab:main}
+\end{table}
+
+\TODO{narrative: which substitution moved the metric, and by how much}
+
+\subsection{Inference latency}
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llrrr}
+\toprule
+Encoder & Decoder & Visual & Decode & Total \\
+\midrule
+CLIP    & BERT  & \TODO{} & \TODO{} & \TODO{} \\
+SigLIP2 & BERT  & \TODO{} & \TODO{} & \TODO{} \\
+SigLIP2 & GPT-2 & \TODO{} & \TODO{} & \TODO{} \\
+\bottomrule
+\end{tabular}
+\caption{Per-clip inference latency in milliseconds, batch size one, measured on the same GPU as
+the accuracy results. Visual encoding and caption decoding are reported separately because the
+two substitutions affect them differently.}
+\label{tab:latency}
+\end{table}
+
+\TODO{discuss the speed consequence honestly, including any regression}
+
+\subsection{Qualitative results}
+
+\TODO{predicted against ground-truth captions across the three variants}
+
+%---------------------------------------------------------------------------------------------
+\section{Limitations}
+\label{sec:limitations}
+
+\textbf{Single seed.} All reported results come from a single training run per configuration. On
+a training set of 4,999 clips, run-to-run variation arising from initialisation, data order and
+per-GOP frame sampling is plausibly of the order of one to two CIDEr points. Differences smaller
+than this should not be read as meaningful, and we do not read them so.
+
+\textbf{Partially unseeded baseline.} The CoCap reproduction was trained without a fixed random
+seed for its first eight epochs, following an interrupted run that was resumed from a
+checkpoint; the remaining epochs and both substitution runs use seed 42 throughout. Seed
+variation is unbiased noise rather than a systematic effect, so this does not favour any
+configuration, but it does mean the reproduction baseline is not exactly reproducible.
+
+\textbf{Reduced scale.} We train on roughly one fifth of VATEX and evaluate on a 1,000-clip
+subset, at a reduced sampling budget (Table~\ref{tab:deviations}). Our conclusions concern the
+relative ordering of the three configurations under these conditions, not absolute performance.
+
+\textbf{Training duration.} \TODO{state whether validation CIDEr had plateaued by epoch 11; if
+it was still rising, say the models are likely under-trained}
+
+%---------------------------------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+\TODO{written once the results are in}
+
+%---------------------------------------------------------------------------------------------
+\appendix
+\section{Reproduction notes}
+\label{sec:repro}
+
+\TODO{toolchain fixes required by the original release; feature pre-extraction; exact commit
+hashes for each run}
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

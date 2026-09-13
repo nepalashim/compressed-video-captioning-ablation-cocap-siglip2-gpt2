@@ -171,4 +171,10 @@ dataset/*/
 
 # Training outputs
 logs/
-video_reader_error.log
+video_reader_error.logpaper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
+paper/*.pdf
+paper/*.synctex.gz

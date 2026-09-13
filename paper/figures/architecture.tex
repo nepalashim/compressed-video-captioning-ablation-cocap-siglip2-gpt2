@@ -1,0 +1,80 @@
+% Architecture of the modified Compressed Video Captioner.
+% Swapped components (SigLIP2 encoder, GPT-2 decoder) are highlighted; everything else follows
+% CoCap (Shen et al., 2023).
+\begin{tikzpicture}[
+    font=\small,
+    box/.style     = {draw, rounded corners=2pt, minimum height=8mm, align=center,
+                      inner sep=3pt, fill=gray!8},
+    newbox/.style  = {box, fill=orange!22, draw=orange!70!black, very thick},
+    inp/.style     = {draw, dashed, rounded corners=2pt, minimum height=7mm, align=center,
+                      inner sep=3pt, fill=blue!6},
+    feat/.style    = {align=center, inner sep=1pt},
+    op/.style      = {draw, circle, inner sep=0.5pt, minimum size=4.2mm},
+    ar/.style      = {-{Latex[length=2mm]}, thick},
+    lbl/.style     = {font=\scriptsize\itshape, inner sep=1pt},
+]
+
+% ---------------- inputs ----------------
+\node[inp] (iframe) {I-frame \\ {\scriptsize $3\times224\times224$}};
+\node[inp, below=7mm of iframe] (mv) {Motion vector \\ {\scriptsize $2\times56\times56$}};
+\node[inp, below=5mm of mv] (res) {Residual \\ {\scriptsize $3\times224\times224$}};
+
+% ---------------- encoders ----------------
+\node[newbox, right=9mm of iframe, minimum width=26mm] (sig)
+    {\textbf{SigLIP2} \\ {\scriptsize vision encoder}};
+\node[box, right=9mm of mv, minimum width=26mm] (menc)
+    {Motion encoder \\ {\scriptsize ViT, 2 layers}};
+\node[box, right=9mm of res, minimum width=26mm] (renc)
+    {Residual encoder \\ {\scriptsize ViT, 2 layers}};
+
+\draw[ar] (iframe) -- (sig);
+\draw[ar] (mv) -- (menc);
+\draw[ar] (res) -- (renc);
+
+% ---------------- add motion + residual ----------------
+\node[op] (plus) at ($(menc.east)!0.5!(renc.east) + (7mm,0)$) {$+$};
+\draw[ar] (menc.east) -- ++(3mm,0) |- (plus.west);
+\draw[ar] (renc.east) -- ++(3mm,0) |- (plus.west);
+
+% ---------------- action encoder ----------------
+\node[box, right=9mm of plus, minimum width=27mm, minimum height=13mm] (act)
+    {Action encoder \\ {\scriptsize self-attn $\rightarrow$ cross-attn} \\ {\scriptsize $\rightarrow$ mean}};
+\draw[ar] (plus) -- node[lbl, above] {$\mathcal{F}_{\mathrm{BP}}$} (act);
+
+% SigLIP2 has two outputs: pooled probe, and the patch tokens used as cross-attention memory
+\coordinate (sigout) at ($(sig.east)+(4mm,0)$);
+\draw[ar] (sig.east) -- (sigout) |- ([yshift=3mm]act.west)
+    node[lbl, pos=0.75, above] {patch tokens};
+
+% ---------------- visual representation ----------------
+\node[feat, right=10mm of act] (vis)
+    {$\mathcal{V}=[\mathcal{F}^{(n)}_{\mathrm{ctx}},\mathcal{F}^{(n)}_{\mathrm{act}}]$};
+\draw[ar] (act) -- node[lbl, above] {$\mathcal{F}_{\mathrm{act}}$} (vis);
+\draw[ar] (sigout) to[out=0, in=120] node[lbl, pos=0.4, above] {$\mathcal{F}_{\mathrm{ctx}}$} (vis.north);
+
+% ---------------- decoder ----------------
+\node[box, right=9mm of vis, minimum width=17mm] (proj) {Linear \\ {\scriptsize projection}};
+\node[newbox, right=8mm of proj, minimum width=24mm, minimum height=16mm] (gpt)
+    {\textbf{GPT-2} \\ {\scriptsize causal decoder} \\ {\scriptsize prefix-LM}};
+\node[inp, below=10mm of proj] (cap) {Caption tokens \\ {\scriptsize $\mathcal{T}_{<t}$}};
+\node[feat, right=8mm of gpt] (out) {$p(y_t \mid \mathcal{V}, \mathcal{T}_{<t})$};
+
+\draw[ar] (vis) -- (proj);
+\draw[ar] (proj) -- (gpt);
+\draw[ar] (cap.east) -| ([xshift=-5mm]gpt.south) -- (gpt.south);
+\draw[ar] (gpt) -- (out);
+
+% ---------------- grouping ----------------
+\begin{scope}[on background layer]
+    \node[draw, dashed, rounded corners, fit=(iframe)(res)(act)(vis),
+          inner sep=4mm,
+          label={[font=\scriptsize\bfseries]above:Compressed Video Transformer}] {};
+    \node[draw, dashed, rounded corners, fit=(proj)(gpt)(cap)(out),
+          inner sep=4mm,
+          label={[font=\scriptsize\bfseries]above:Multimodal Decoder}] {};
+\end{scope}
+
+% per-GOP annotation
+\node[lbl, below=2mm of res] {$\times M$ per GOP, $\times N$ GOPs};
+
+\end{tikzpicture}
