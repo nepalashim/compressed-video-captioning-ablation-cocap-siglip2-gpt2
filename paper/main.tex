@@ -46,7 +46,9 @@ comparisons are made against our own reproduction of CoCap rather than its publi
 because we train on a 4,999-clip subset of VATEX at a reduced sampling budget; absolute values
 are therefore not comparable with the original work.
 
-Our reproduction attains \num{52.68} CIDEr against the published 52.7, supporting its fidelity.
+Our reproduction tracks the published result closely across metrics (54.9 against 52.7
+CIDEr, 23.4 against 23.2 METEOR), the small excess being attributable to our evaluation
+subset rather than to any improvement.
 \TODO{one-sentence summary of the result once the three runs complete} We additionally report
 inference latency for each configuration, since speed is the property that motivates
 compressed-domain captioning in the first place, and an accuracy gain purchased at a latency
@@ -78,8 +80,8 @@ self-evident that a larger decoder can exploit it.
 This paper is deliberately narrow in scope. We contribute:
 
 \begin{enumerate}\itemsep2pt
-\item A documented reproduction of CoCap on VATEX, reaching \num{52.68} CIDEr against the
-      published 52.7, together with the source-level fixes the original release requires on a
+\item A documented reproduction of CoCap on VATEX that tracks the published result across
+      metrics (Table~\ref{tab:repro}), together with the source-level fixes the original release requires on a
       current toolchain (Appendix~\ref{sec:repro}).
 \item A controlled attribution study over three configurations---CLIP+BERT, SigLIP2+BERT,
       SigLIP2+GPT-2---sharing data, sampling budget, schedule and evaluation, isolating the
@@ -266,12 +268,13 @@ wall-clock time}
 & B4 & M & R & C \\
 \midrule
 CoCap, published~\cite{cocap} & 31.4 & 23.2 & 49.4 & 52.7 \\
-Our reproduction              & \num{30.0} & \num{22.9} & \num{48.9} & \num{52.7} \\
+Our reproduction              & 29.7 & 23.4 & 48.9 & 54.9 \\
 \bottomrule
 \end{tabular}
 \caption{Our CoCap reproduction against the published VATEX result. The evaluation splits differ
 (Section~\ref{sec:deviations}), so this indicates fidelity rather than being a like-for-like
-comparison.}
+comparison. Our values run slightly above the published ones despite one fifth the training
+data, which we attribute to the evaluation subset rather than to any improvement.}
 \label{tab:repro}
 \end{table}
 

@@ -132,9 +132,9 @@ unseeded, 8-11 at seed 42.
 | 8 | 53.89 | **30.28** | 23.24 | 49.02 | 83.31 |
 | 9 | 54.55 | 29.54 | **23.30** | **49.05** | 81.33 |
 | 10 | **54.65** | 29.70 | 23.26 | 48.77 | 79.59 |
-| 11 | *pending* | | | | |
+| 11 | **54.85** | 29.67 | **23.40** | 48.92 | 78.11 |
 
-**Converged.** Per-epoch CIDEr gains fell from +2.5 (epoch 7) to +1.2, +0.7, +0.1 - so 12 epochs
+**Converged.** Per-epoch CIDEr gains fell from +2.5 (epoch 7) to +1.2, +0.7, +0.1, +0.2 - so 12 epochs
 is sufficient and the model is not under-trained. BLEU-4 peaked at epoch 8 and METEOR/ROUGE at
 epoch 9, while CIDEr continued to creep up; best-checkpoint selection therefore depends on the
 monitored metric, and we monitor CIDEr.

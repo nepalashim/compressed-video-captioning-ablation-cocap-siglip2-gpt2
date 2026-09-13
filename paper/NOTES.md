@@ -45,6 +45,17 @@ comparable with the published paper.
   Dropping it discards nothing.
 - **Applied identically to all three variants**, so the internal comparison remains valid.
 
+### FINAL baseline numbers (epoch 11, run complete)
+CIDEr **54.85**, BLEU-4 29.67, METEOR **23.40**, ROUGE-L 48.92.
+
+Per-metric peaks differ: BLEU-4 peaked at epoch 8 (30.28) and ROUGE-L at epoch 9 (49.05).
+We monitor and report CIDEr, so epoch 11 is the reported checkpoint. Say so explicitly.
+
+**Note the direction of the gap.** Our 54.85 sits *above* the published 52.7 despite one
+fifth the training data. Do not read this as an improvement - it almost certainly reflects
+the 1,000-clip evaluation subset differing from the full VATEX test split. State that
+attribution in the paper rather than leaving the higher number to speak for itself.
+
 ### Reproduction fidelity (a strength - report it)
 The CoCap reproduction reached **CIDEr 52.68 / BLEU-4 30.03 / METEOR 22.90 / ROUGE-L 48.93** at
 epoch 7, against the paper's published VATEX numbers of 52.7 / 31.4 / 23.2 / 49.4. Different
