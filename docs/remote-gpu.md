@@ -180,7 +180,7 @@ To resume after a preemption:
 
 ```bash
 python tools/train_net.py --config-name=exp/train/vatex_subset_baseline \
-    budget=laptop_8gb reader=pre_extract \r
+    budget=laptop_8gb reader=pre_extract \
     ckpt_path=logs/vatex_subset_baseline_seed42/lightning_logs/version_0/checkpoints/epoch07.ckpt
 ```
 
