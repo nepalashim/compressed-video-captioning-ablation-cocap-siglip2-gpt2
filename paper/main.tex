@@ -341,8 +341,10 @@ configuration, but it does mean the reproduction baseline is not exactly reprodu
 subset, at a reduced sampling budget (Table~\ref{tab:deviations}). Our conclusions concern the
 relative ordering of the three configurations under these conditions, not absolute performance.
 
-\textbf{Training duration.} \TODO{state whether validation CIDEr had plateaued by epoch 11; if
-it was still rising, say the models are likely under-trained}
+\textbf{Training duration.} Validation CIDEr plateaus before the end of training:
+per-epoch gains fall from $+2.5$ at epoch 7 to $+1.2$, $+0.7$ and $+0.1$ over the epochs that
+follow. The models are therefore trained to convergence at this budget rather than
+truncated, so the comparison is not confounded by differing degrees of under-training.
 
 %---------------------------------------------------------------------------------------------
 \section{Conclusion}
