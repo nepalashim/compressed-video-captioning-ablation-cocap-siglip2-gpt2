@@ -197,3 +197,6 @@ test_output/
 
 # Model checkpoints, wherever they land
 *.ckpt
+
+# Upstream CoCap README - this repo is documented by README_ablation.md instead
+README.md
