@@ -49,7 +49,9 @@ are therefore not comparable with the original work.
 Our reproduction tracks the published result closely across metrics (54.9 against 52.7
 CIDEr, 23.4 against 23.2 METEOR), the small excess being attributable to our evaluation
 subset rather than to any improvement.
-\TODO{one-sentence summary of the result once the three runs complete} We additionally report
+We find the two substitutions pull in opposite directions: SigLIP2 alone improves every metric
+(+4.5 CIDEr), while adding GPT-2 on top erodes that gain, because a pretrained decoder overfits
+4,999 clips within two epochs. We additionally report
 inference latency for each configuration, since speed is the property that motivates
 compressed-domain captioning in the first place, and an accuracy gain purchased at a latency
 cost should be reported as such.
@@ -288,17 +290,47 @@ data, which we attribute to the evaluation subset rather than to any improvement
 \toprule
 Encoder & Decoder & B4 & M & R & C \\
 \midrule
-CLIP    & BERT  & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
-SigLIP2 & BERT  & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
-SigLIP2 & GPT-2 & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+CLIP    & BERT-style & 29.67 & 23.40 & 48.92 & 54.85 \\
+\textbf{SigLIP2} & \textbf{BERT-style} & \textbf{31.01} & \textbf{24.06} & \textbf{49.43} & \textbf{59.33} \\
+SigLIP2 & GPT-2 & 29.71 & 23.63 & 48.75 & 56.56 \\
 \bottomrule
 \end{tabular}
 \caption{Attribution over the two substitutions, under identical data, sampling budget and
-schedule. Single seed throughout; see Section~\ref{sec:limitations}.}
+schedule. Each row reports the epoch of highest validation CIDEr. Single seed throughout; see
+Section~\ref{sec:limitations}.}
 \label{tab:main}
 \end{table}
 
-\TODO{narrative: which substitution moved the metric, and by how much}
+Substituting the encoder alone accounts for the entire improvement: SigLIP2 paired with the
+original shallow decoder gains $+4.48$ CIDEr over the reproduction, and improves every other
+metric as well ($+1.34$ BLEU-4, $+0.66$ METEOR, $+0.51$ ROUGE-L). Adding the GPT-2 decoder on
+top does not compound that gain --- it erodes it, to $+1.71$ CIDEr.
+
+The reason lies in the training dynamics rather than the peak scores, and
+Table~\ref{tab:stability} makes it explicit. Both configurations using the shallow decoder train
+to convergence and hold their best score to the end. The GPT-2 configuration instead peaks at
+epoch~2 and declines monotonically for the following nine epochs, finishing $11.3$ CIDEr below
+its own peak and $9.6$ below the reproduction baseline, while its training loss falls by a factor
+of $5.7$ (from $89.8$ to $15.6$). A 124M-parameter pretrained decoder memorises 4,999 clips; the
+two-layer decoder trained from scratch lacks the capacity to do so, which at this data scale is
+a virtue rather than a limitation.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llrrr}
+\toprule
+Encoder & Decoder & Best C & Epoch & Final C \\
+\midrule
+CLIP    & BERT-style & 54.85 & 11 & 54.85 \\
+SigLIP2 & BERT-style & 59.33 & 9 & 59.11 \\
+SigLIP2 & GPT-2 & 56.56 & 2 & 45.30 \\
+\bottomrule
+\end{tabular}
+\caption{Training stability. The shallow decoder holds its peak through to the end of training;
+the pretrained decoder reaches its peak at epoch~2 and loses 11.3 CIDEr over the nine epochs
+that follow.}
+\label{tab:stability}
+\end{table}
 
 \subsection{Inference latency}
 

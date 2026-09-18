@@ -5,6 +5,51 @@ Things that are easy to forget between running an experiment and writing it up. 
 
 ---
 
+## FINAL RESULTS - all three runs complete (12 epochs each, seed 42 except baseline ep0-7)
+
+Best epoch by validation CIDEr:
+
+| Encoder | Decoder | B4 | M | R | CIDEr | best ep | final ep |
+|---|---|---|---|---|---|---|---|
+| CLIP | BERT-style | 29.67 | 23.40 | 48.92 | 54.85 | 11 | 54.85 |
+| **SigLIP2** | **BERT-style** | **31.01** | **24.06** | **49.43** | **59.33** | 9 | 59.11 |
+| SigLIP2 | GPT-2 | 29.71 | 23.63 | 48.75 | 56.56 | 2 | 45.30 |
+
+**Headline:** the encoder substitution delivers (+4.48 CIDEr, and every other metric up);
+the decoder substitution backfires. SigLIP2+GPT-2 peaks at epoch 2 then loses 11.3 CIDEr over
+nine epochs while its training loss falls 5.7x - a 124M pretrained decoder memorising 4,999
+clips. The margin for SigLIP2+BERT is well outside the +-1-2 single-seed noise band; the
++1.71 for SigLIP2+GPT-2 is not, and should not be claimed.
+
+### SigLIP2 + BERT full curve (converged)
+
+| ep | 0 | 2 | 4 | 6 | 8 | 9 | 10 | 11 |
+|---|---|---|---|---|---|---|---|---|
+| CIDEr | 9.1 | 34.3 | 47.6 | 54.1 | 58.0 | **59.3** | 58.8 | 59.1 |
+
+Oscillates around 59 for the last three epochs, so converged rather than truncated.
+
+### SigLIP2 + GPT-2 full curve (overfits)
+
+| ep | 0 | 1 | 2 | 3 | 5 | 7 | 9 | 11 |
+|---|---|---|---|---|---|---|---|---|
+| CIDEr | 41.4 | 52.4 | **56.6** | 56.0 | 53.6 | 48.4 | 47.5 | 45.3 |
+| loss | 89.8 | 74.8 | 64.9 | 56.5 | 40.8 | 28.2 | 20.2 | 15.6 |
+
+### Reporting caveat on best-epoch selection
+Each variant is reported at its best validation epoch, and there is no held-out test split -
+so some of each peak is fitted to the same 1,000 clips used to select it. This affects the
+GPT-2 row most (its peak is at epoch 2, chosen from 12 candidates) and the baseline least
+(its peak is its final epoch, so no selection occurred). State this in Limitations. The
+SigLIP2+BERT conclusion survives it: that variant beats the baseline at every epoch from 6
+onward, not only at its peak.
+
+### Still outstanding
+- [ ] latency for all three on GPU: `tools/benchmark_latency.py --device cuda -n 50 budget=laptop_8gb`
+- [ ] qualitative caption examples per variant
+- [ ] optional: frozen-GPT-2 run, to separate 'unsuited' from 'under-regularised'
+
+---
 ## Must appear in the paper
 
 ### Seeding (Limitations)
