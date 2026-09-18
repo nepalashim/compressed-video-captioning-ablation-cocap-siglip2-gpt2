@@ -42,11 +42,12 @@ So the recommended variant is both more accurate *and* slightly faster than the 
 
 These are stated up front rather than buried, because several of them would change how you read the table.
 
-1. **Not comparable to published CoCap numbers.** This trains on 4,999 VATEX clips, not the full ~26k, at a reduced sampling budget (5 GOPs x 16 B/P frames instead of 8 x 59). Absolute values are consequently much lower than the paper's. Only the *within-table* comparisons are meaningful.
+1. **Not comparable to published CoCap numbers.** This trains on 4,999 VATEX clips, not the full ~26k, at a reduced sampling budget (5 GOPs x 16 B/P frames instead of 8 x 59), and evaluates on a 1,000-clip subset. Against CoCap's published VATEX result the reproduction lands mixed rather than uniformly below — CIDEr 54.85 vs 52.7 and METEOR 23.40 vs 23.2 sit above it, BLEU-4 29.67 vs 31.4 and ROUGE-L 48.92 vs 49.4 below — which reflects the evaluation subset, not an improvement. Only the *within-table* comparisons are meaningful.
 2. **Single seed per variant.** No variance estimate. The +4.48 CIDEr encoder gain is large and consistent across all four metrics and across epochs, so it is unlikely to be noise — but it is not a significance test.
 3. **The baseline's seeding is inconsistent.** Epochs 0–7 of the baseline ran before seeding was pinned; epochs 8–11 and both SigLIP2 variants ran under seed 42. The baseline was not re-run. This is a real limitation of the comparison, disclosed rather than smoothed over.
 4. **"Best epoch" is selection-inflated.** Picking the top epoch by validation CIDEr and reporting that same validation CIDEr is optimistic. The final-epoch column is given so you can read the honest number; the encoder conclusion survives either way, and the GPT-2 conclusion gets *worse* under final-epoch.
-5. **The GPT-2 result shows it is unsuited *at this data scale*** — it does not show GPT-2 is a bad decoder in general. Separating "wrong architecture" from "under-regularised / too little data" would need a frozen-decoder or larger-data run, which was not performed.
+5. **The variants did not all converge equally cleanly.** The baseline plateaus clearly (per-epoch CIDEr gains of +1.2, +0.7, +0.1, +0.2 over its last four epochs), but SigLIP2 gains +2.8 as late as epoch 8 before settling within 0.6 CIDEr across its final three. No run is truncated mid-improvement, but what residual under-training exists sits on the SigLIP2 side — which makes the +4.48 CIDEr encoder gain a conservative estimate rather than an inflated one.
+6. **The GPT-2 result shows it is unsuited *at this data scale*** — it does not show GPT-2 is a bad decoder in general. Separating "wrong architecture" from "under-regularised / too little data" would need a frozen-decoder or larger-data run, which was not performed.
 
 ---
 
