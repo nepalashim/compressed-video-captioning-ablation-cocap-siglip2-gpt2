@@ -105,11 +105,40 @@ comparison is internal, against our own reproduction under identical conditions.
 \section{Related Work}
 \label{sec:related}
 
-\TODO{Compressed-domain vision: CoViAR, MM-ViT, MVCGC, ATTP}
+\textbf{Compressed-domain vision.} Operating on the compressed bitstream avoids decoding every
+frame and reuses motion information the encoder has already computed. CoViAR~\cite{coviar}
+established the approach for action recognition on MPEG-4, back-tracking motion vectors to the
+preceding I-frame. MM-ViT~\cite{mmvit} extended it to a multi-modal transformer over I-frames,
+motion vectors, residuals and audio. Because MPEG-4 is largely superseded, later work targets
+H.264 and H.265, whose more flexible inter-prediction makes the compressed representation harder
+to learn from: MVCGC~\cite{mvcgc} learns video representations self-supervised from the mutual
+information between RGB frames and motion vectors, and ATTP~\cite{attp} targets real-time
+recognition on embedded hardware. CoCap~\cite{cocap} brought the setting to captioning. We work
+within its H.264 pipeline unchanged, and our observations in
+Sections~\ref{sec:gop} and~\ref{sec:mv} concern that pipeline rather than the model.
 
-\TODO{Video captioning: HMN, ORG-TRL, SGN, SwinBERT, MV-GPT, TextKG}
+\textbf{Video captioning.} One line of work invests in encoder structure over offline-extracted
+features: HMN~\cite{hmn} builds a hierarchical modular encoder bridging video and language,
+ORG-TRL~\cite{orgtrl} an object relational graph, and SGN~\cite{sgn} groups frames by the word
+phrases of a partially decoded caption. A second line removes offline extraction altogether:
+SwinBERT~\cite{swinbert} feeds video patches directly to a VidSwin backbone, and
+MV-GPT~\cite{mvgpt} pretrains an encoder-decoder end-to-end over frames and transcribed speech.
+A third brings in outside knowledge, as TextKG~\cite{textkg} does with knowledge graphs. These
+all decode video first. CoCap's contribution is to skip that step, which is what makes its
+latency competitive and what makes latency the axis on which any modification to it must be
+judged.
 
-\TODO{Vision-language encoders (CLIP, SigLIP, SigLIP2) and pretrained decoders for captioning}
+\textbf{Pretrained encoders and decoders.} CLIP~\cite{clip} made contrastively pretrained vision
+encoders a default initialisation for vision-language tasks, and CoCap adopts it for the
+I-frame branch. SigLIP~\cite{siglip} replaced the softmax contrastive objective with a pairwise
+sigmoid loss that decouples training from batch size, and SigLIP2~\cite{siglip2} adds
+decoder-based pretraining, self-distillation and masked prediction, improving dense and
+localisation-sensitive transfer in particular --- properties that matter here, since the action
+encoder cross-attends into the I-frame's patch tokens rather than using a pooled vector alone.
+On the language side, pairing a pretrained decoder with a visual prefix is well established for
+image captioning, ClipCap~\cite{clipcap} being the canonical minimal form. Our results suggest
+that the transfer of this recipe to compressed-domain video captioning is bounded by data scale
+rather than by architecture.
 
 %---------------------------------------------------------------------------------------------
 \section{Method}
@@ -171,8 +200,8 @@ $\mu = \sigma = 0.5$.
 
 CoCap's decoder concatenates the visual tokens with the caption tokens and applies a shifted
 causal mask, so that every text position attends to the complete visual representation and to
-preceding text only. This is precisely GPT-2's native attention pattern, which makes the
-substitution a prefix-LM rather than a re-architecture: we project the visual tokens into GPT-2's
+preceding text only. This is precisely the attention pattern of GPT-2~\cite{gpt2}, which makes
+the substitution a prefix-LM rather than a re-architecture: we project the visual tokens into GPT-2's
 embedding space, prepend them to the caption's word embeddings, and let the pretrained causal
 mask do the rest. A learned type embedding distinguishes context from action tokens and is
 zero-initialised, so the head begins as an unmodified GPT-2.
@@ -190,7 +219,8 @@ exactly, so the visual projection is dimension-preserving.
 \subsection{Data}
 
 We use a 4,999/1,000 clip train/validation subset of VATEX~\cite{vatex}, with ten English
-captions per clip. Two clip identifiers in the source annotation map to a single video file with
+captions per clip, and report BLEU-4, METEOR, ROUGE-L and CIDEr~\cite{cider}, monitoring the last
+of these for checkpoint selection. Two clip identifiers in the source annotation map to a single video file with
 no recoverable correspondence; both are discarded rather than paired with a video that may not
 match. Clips arrive already encoded as H.264 at 240 pixels on the short edge with
 \texttt{KeyInt} of 60 and no B-frames, so no re-encoding is performed.
@@ -254,8 +284,27 @@ single forward pass.
 
 \subsection{Implementation}
 
-\TODO{optimiser, learning-rate schedule, warmup, label smoothing, hardware, per-epoch
-wall-clock time}
+All three configurations share an identical optimisation setup; only the substituted components
+differ. We use the Adam variant with decoupled weight decay and gradient clipping at $1.0$ that
+CoCap employs, over three parameter groups: randomly initialised parameters --- the motion,
+residual and action encoders, and the visual projection --- at $10^{-4}$; the pretrained vision
+backbone at $10^{-6}$; and, where present, the pretrained decoder at $5\times10^{-5}$. Separating
+the third group matters, because a rate suited to freshly initialised layers destabilises a
+pretrained language model on a training set this small.
+
+The learning rate warms up linearly over the first 10\% of optimiser steps and then decays
+per-epoch by $0.91$, reaching $0.32$ of peak by the end of the twelfth epoch. This decay rate is
+retuned for the shortened schedule: CoCap's $0.95$ over twenty epochs leaves a twelve-epoch run
+at $0.54$ of peak and visibly under-annealed. Training uses label smoothing of $0.1$, a caption
+length of 32 tokens, and bfloat16 mixed precision. The optimisation batch is 12, reached as a
+per-device batch of 2 with six gradient accumulation steps.
+
+Experiments run on a single RTX 4070 Laptop GPU with 8\,GB of memory. Compressed-domain features
+are extracted once ahead of training and cached (20.2\,GB for 6,000 clips, about eight minutes),
+since with ten captions per clip a twelve-epoch run would otherwise parse each bitstream around
+120 times. An epoch takes approximately 1\,h\,25\,m for the configurations using the shallow
+decoder and 1\,h\,11\,m for the GPT-2 configuration, whose validation is slower but whose
+training step is not.
 
 %---------------------------------------------------------------------------------------------
 \section{Results}
@@ -280,7 +329,11 @@ data, which we attribute to the evaluation subset rather than to any improvement
 \label{tab:repro}
 \end{table}
 
-\TODO{update Table~\ref{tab:repro} with the final epoch-11 numbers}
+The reproduction converges rather than being truncated: per-epoch CIDEr gains fall from $+2.5$ at
+epoch~7 to $+1.2$, $+0.7$ and $+0.2$ over the epochs that follow, so the twelve-epoch budget is
+sufficient. We note in passing that the individual metrics peak at different epochs --- BLEU-4 at
+epoch~8, ROUGE-L at epoch~9, CIDEr at epoch~11 --- so the choice of reported checkpoint depends on
+the monitored metric. We monitor CIDEr throughout, for all configurations.
 
 \subsection{Attribution}
 
@@ -477,8 +530,38 @@ captioning at modest data scale, upgrade the visual encoder and leave the decode
 \section{Reproduction notes}
 \label{sec:repro}
 
-\TODO{toolchain fixes required by the original release; feature pre-extraction; exact commit
-hashes for each run}
+Reproducing CoCap on a current toolchain required several source-level fixes, none of which are
+discoverable from its documentation. We record them because they are the difference between the
+release running and not running, and because our reproduction result depends on them.
+
+\textbf{The compressed-domain reader.} CoCap reads motion vectors and residuals through a
+separate native extension that builds a patched FFmpeg 5.1. Two patches are needed on any modern
+Linux toolchain. FFmpeg 5.1 fails to assemble under binutils 2.41 or newer, which rejects an
+unclipped shift constant in the inline assembly of \texttt{libavcodec/x86/mathops.h}; FFmpeg
+fixed this after 5.1 by masking the operand. Separately, the extension predates NumPy~2, which
+tightened \texttt{PyArray\_GETPTR3} to require \texttt{PyArrayObject~*} where the source passes
+\texttt{PyObject~*}.
+
+\textbf{Silent failure on unreadable video.} The reader catches every exception and returns
+all-zero tensors alongside a failure flag that the calling code discarded. An unreadable clip
+therefore trained as a black video, indistinguishable downstream from real data. We propagate the
+flag and count such failures explicitly; all results reported here were produced with zero
+occurrences.
+
+\textbf{Tied weights in the optimizer grouping.} GPT-2 ties its output head to its token
+embedding, so \texttt{named\_modules} reaches that tensor under two paths while
+\texttt{named\_parameters} reports it once. CoCap's parameter grouping walks the former and looks
+up in the latter, which raises on any decoder with tied weights.
+
+\textbf{Feature pre-extraction.} Because \texttt{unfold\_sentences} treats each caption as a
+training sample, a twelve-epoch run over ten captions per clip parses every bitstream around 120
+times. We extract the compressed-domain features once and cache them (3.4\,MB per clip, 20.2\,GB
+for 6,000 clips, about eight minutes), which leaves the GPU rather than the CPU as the
+bottleneck.
+
+Code, configurations and the exact commit for every run are released at
+\TODO{repository URL}; all experiments in this paper were produced at commit
+\texttt{1e6b29c}.
 
 \bibliographystyle{plain}
 \bibliography{references}
