@@ -181,3 +181,19 @@ paper/*.bbl
 paper/*.blg
 paper/*.pdf
 paper/*.synctex.gz
+
+# WSL virtualenv (the .venv pattern above misses the suffixed name)
+.venv-wsl/
+
+# Paper source and working notes - kept out of the public repo
+paper/
+
+# Hydra run outputs
+outputs/
+.hydra/
+
+# Test artifacts (test_video_readers writes visualisation frames)
+test_output/
+
+# Model checkpoints, wherever they land
+*.ckpt
