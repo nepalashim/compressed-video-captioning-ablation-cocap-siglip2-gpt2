@@ -372,7 +372,58 @@ deliberate choice.
 
 \subsection{Qualitative results}
 
-\TODO{predicted against ground-truth captions across the three variants}
+Table~\ref{tab:qual} shows each configuration at its own best epoch, together with the GPT-2
+configuration at the end of training, on four validation clips.
+
+\begin{table*}[t]
+\centering\small
+\begin{tabular}{@{}p{0.14\textwidth}p{0.80\textwidth}@{}}
+\toprule
+\multicolumn{2}{@{}l}{\emph{Ground truth}: a man repelling down a side of a mountain covered in snow} \\
+\midrule
+CLIP+BERT & a man is using a shovel to clean up a snow covered area \\
+SigLIP2+BERT & a man is using a shovel to pull a large snow covered mountain \\
+SigLIP2+GPT-2 (ep.~2) & A man is shown using a rope to climb up a large rock \\
+SigLIP2+GPT-2 (ep.~11) & A man is holding onto a rope and floating in the snow \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Ground truth}: A group of men are standing on a theater stage and preparing to do an acting scene} \\
+\midrule
+CLIP+BERT & a man is talking to a group of people in a room \\
+SigLIP2+BERT & a man is talking to a group of people while talking to the camera \\
+SigLIP2+GPT-2 (ep.~2) & A man is speaking into a microphone while a group of people are watching \\
+SigLIP2+GPT-2 (ep.~11) & A man is standing and signing what a woman is saying in a recording \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Ground truth}: A Champion eyeglasses commercial showing different color frames} \\
+\midrule
+CLIP+BERT & a woman is talking about a video of a video \\
+SigLIP2+BERT & a woman is talking about a video and then a man talks about it \\
+SigLIP2+GPT-2 (ep.~2) & A woman is talking about a pair of sunglasses that are on a woman's face \\
+SigLIP2+GPT-2 (ep.~11) & A woman is standing with a man and woman and people are talking and looking at them \\
+\bottomrule
+\end{tabular}
+\caption{Generated captions, each configuration at its best epoch, with the GPT-2 configuration
+also shown after overfitting. Detokenisation artefacts are removed for readability.}
+\label{tab:qual}
+\end{table*}
+
+Two patterns are visible. First, the encoder substitution sharpens visual detail: SigLIP2
+recovers ``mountain'' where the reproduction says only ``area'', consistent with its higher
+scores across all four metrics.
+
+Second, and less comfortably for our headline number, the GPT-2 configuration often produces the
+most fluent and sometimes the best-grounded caption despite scoring lower. On the third clip it
+is the only configuration to identify eyewear at all, and on the first the only one to recover
+the rope. Its phrasing is more varied and more natural, which is precisely what $n$-gram metrics
+penalise: CIDEr and BLEU reward overlap with reference wording, so a caption that describes the
+same content in different words scores worse than a generic one that happens to reuse common
+phrasing. We report this because it qualifies the comparison rather than because it overturns
+it --- the GPT-2 configuration remains slower, unstable, and unable to train to convergence at
+this data scale --- but a purely metric-driven reading would overstate the gap.
+
+The two GPT-2 rows also illustrate the overfitting directly. At epoch~2 the model describes a
+rope and a climb; by epoch~11 the same clip becomes ``floating in the snow'', and the theatre
+clip acquires a recording and a woman who are not present. Grounding degrades into confabulation
+as the decoder shifts from using the visual prefix to reproducing training-set phrasing.
 
 %---------------------------------------------------------------------------------------------
 \section{Limitations}

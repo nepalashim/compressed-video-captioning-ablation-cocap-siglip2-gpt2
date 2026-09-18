@@ -66,9 +66,49 @@ sequence at each of 32 steps with no KV cache. Note in the paper that this is in
 the original implementation and preserved for comparability, not chosen.
 
 ---
+### Qualitative - IMPORTANT caveat found
+
+Compare each variant at its OWN best epoch, not all at epoch 11. Epoch 11 is the baseline's
+best and siglip's near-best, but GPT-2's *worst* (45.30, down from 56.56 at epoch 2). Showing
+them all at epoch 11 would misrepresent GPT-2.
+
+Command that picks correctly (dumps are one per epoch; filter out the small sanity-check one):
+
+```python
+fs = [f for f in sorted(glob.glob(pattern)) if os.path.getsize(f) > 100_000]
+# baseline -> fs[-1] (ep11), siglip -> fs[9], gpt2 -> fs[2]
+```
+
+### The n-gram metric tension - state this in the paper, do not hide it
+
+GPT-2 at epoch 2 often produces the most fluent and sometimes the best-grounded caption while
+scoring 2.8 CIDEr *below* siglip. Examples:
+
+- eyeglasses commercial: gpt2 says 'a pair of sunglasses that are on a woman's face' - the
+  only variant to identify eyewear. baseline says 'a video of a video'.
+- rappelling clip: gpt2 alone recovers 'rope' and 'climb'.
+- theatre clip: gpt2 alone gets 'speaking into a microphone while a group of people watch'.
+
+Reason: CIDEr and BLEU reward overlap with reference *wording*. Varied natural phrasing is
+penalised even when semantically closer. This qualifies the headline number without
+overturning it - GPT-2 is still slower, unstable and cannot train to convergence. Omitting it
+would be selective reporting.
+
+### Overfitting is visible in the captions too
+Same clip, GPT-2 epoch 2 vs epoch 11:
+- 'using a rope to climb up a large rock' -> 'holding onto a rope and floating in the snow'
+- 'speaking into a microphone while a group watches' -> 'signing what a woman is saying in a
+  recording' (no woman, no recording in the clip)
+Grounding degrades into confabulation. Good material for the qualitative figure.
+
+### Detokenisation artefact
+CLIP-tokenizer variants emit a space before the final period ('snow .'). Cosmetic; stripped in
+the paper table. Does not affect PTBTokenizer-based metrics.
+
+---
 ### Still outstanding
 - [x] latency for all three on GPU - DONE, see above
-- [ ] qualitative caption examples per variant
+- [x] qualitative caption examples per variant - DONE, in paper Table 5
 - [ ] Related Work section (3 TODO blocks)
 - [ ] Implementation subsection (optimiser, schedule, hardware)
 - [ ] Appendix: reproduction notes (toolchain fixes, commit hashes)
