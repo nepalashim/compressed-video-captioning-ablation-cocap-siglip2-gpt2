@@ -44,9 +44,34 @@ GPT-2 row most (its peak is at epoch 2, chosen from 12 candidates) and the basel
 SigLIP2+BERT conclusion survives it: that variant beats the baseline at every epoch from 6
 onward, not only at its peak.
 
+### Latency - MEASURED (RTX 4070 Laptop, batch 1, median of 50, budget=laptop_8gb)
+
+| Encoder | Decoder | visual | decode | total | stdev(total) |
+|---|---|---|---|---|---|
+| CLIP | BERT-style | 50.6 | 184.3 | 249.2 | 36.4 |
+| SigLIP2 | BERT-style | 50.6 | 173.4 | **222.9** | 30.3 |
+| SigLIP2 | GPT-2 | 55.0 | 400.1 | 458.7 | 50.0 |
+
+**SigLIP2 is free.** 50.6 vs 50.6 ms on the visual path - the two encoders share depth, width
+and patch size, so identical FLOPs. The lower total for SigLIP2+BERT (222.9 vs 249.2) is
+*within* the run-to-run spread (sigma ~30-36 ms), so **do not claim a speedup**. Claim: +4.48
+CIDEr at no measurable latency cost.
+
+**GPT-2 costs 2.2x on decode**, 1.84x end-to-end. Twelve layers instead of two, run once per
+output token. Slower on the axis the method exists to optimise, less accurate than the encoder
+swap alone, and unstable. Report as a negative result.
+
+Decoding is 74% of baseline total, because the greedy loop re-runs the decoder over the full
+sequence at each of 32 steps with no KV cache. Note in the paper that this is inherited from
+the original implementation and preserved for comparability, not chosen.
+
+---
 ### Still outstanding
-- [ ] latency for all three on GPU: `tools/benchmark_latency.py --device cuda -n 50 budget=laptop_8gb`
+- [x] latency for all three on GPU - DONE, see above
 - [ ] qualitative caption examples per variant
+- [ ] Related Work section (3 TODO blocks)
+- [ ] Implementation subsection (optimiser, schedule, hardware)
+- [ ] Appendix: reproduction notes (toolchain fixes, commit hashes)
 - [ ] optional: frozen-GPT-2 run, to separate 'unsuited' from 'under-regularised'
 
 ---

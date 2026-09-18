@@ -340,18 +340,35 @@ that follow.}
 \toprule
 Encoder & Decoder & Visual & Decode & Total \\
 \midrule
-CLIP    & BERT  & \TODO{} & \TODO{} & \TODO{} \\
-SigLIP2 & BERT  & \TODO{} & \TODO{} & \TODO{} \\
-SigLIP2 & GPT-2 & \TODO{} & \TODO{} & \TODO{} \\
+CLIP    & BERT-style & 50.6 & 184.3 & 249.2 \\
+SigLIP2 & BERT-style & 50.6 & 173.4 & \textbf{222.9} \\
+SigLIP2 & GPT-2 & 55.0 & 400.1 & 458.7 \\
 \bottomrule
 \end{tabular}
-\caption{Per-clip inference latency in milliseconds, batch size one, measured on the same GPU as
-the accuracy results. Visual encoding and caption decoding are reported separately because the
-two substitutions affect them differently.}
+\caption{Per-clip inference latency in milliseconds (median of 50 runs, batch size one, RTX 4070
+Laptop), measured on the same hardware as the accuracy results. Visual encoding and caption
+decoding are reported separately because the two substitutions affect them differently.}
 \label{tab:latency}
 \end{table}
 
-\TODO{discuss the speed consequence honestly, including any regression}
+The encoder substitution is free. SigLIP2 and CLIP ViT-B/16 share depth, width and patch size, so
+their visual passes are indistinguishable at 50.6\,ms each; the small difference in total latency
+($222.9$ against $249.2$\,ms) lies within the run-to-run spread of these measurements
+($\sigma \approx 30$--$36$\,ms) and we do not claim it as a speedup. The defensible statement is
+that SigLIP2 delivers $+4.48$ CIDEr at no measurable latency cost --- which matters for a method
+whose premise is inference speed.
+
+The decoder substitution is not free. GPT-2 decodes in $400.1$\,ms against the shallow decoder's
+$184.3$, a factor of $2.2$, lifting end-to-end latency by $1.84\times$. Twelve transformer layers
+replace two, and greedy decoding runs them once per output token. So the GPT-2 configuration is
+slower on the axis the approach exists to optimise, less accurate than the encoder substitution
+alone, and unstable in training. We report it as a negative result.
+
+Decoding dominates inference in every configuration --- 74\% of the baseline's total --- because
+the greedy loop re-runs the decoder over the full visual-plus-text sequence at each of the 32
+steps. Key--value caching would reduce this substantially for all three, and its absence is a
+property of the original implementation that we preserve for comparability rather than a
+deliberate choice.
 
 \subsection{Qualitative results}
 
@@ -385,7 +402,24 @@ truncated, so the comparison is not confounded by differing degrees of under-tra
 \section{Conclusion}
 \label{sec:conclusion}
 
-\TODO{written once the results are in}
+We set out to determine which of CoCap's two dated components limits its accuracy. The answer is
+the vision encoder, and only the vision encoder. Replacing CLIP with SigLIP2 improves every
+caption metric ($+4.48$ CIDEr, $+1.34$ BLEU-4, $+0.66$ METEOR, $+0.51$ ROUGE-L) at no measurable
+inference cost, because the two encoders are architecturally matched. Replacing the shallow
+decoder with GPT-2, the substitution one would expect to help more, instead makes the system
+slower, less accurate than the encoder substitution alone, and unstable: it reaches its best
+score after two epochs and then loses $11.3$ CIDEr over the following nine while its training
+loss falls by a factor of $5.7$.
+
+The mechanism is capacity relative to data. At 4,999 training clips a 124M-parameter pretrained
+decoder memorises the training set long before it exhausts what the visual representation can
+tell it, whereas a two-layer decoder trained from scratch cannot. At this scale the shallow
+decoder's limited capacity is protective rather than limiting, and modernising it is
+counterproductive. Whether that reverses at full-VATEX scale, or under stronger regularisation of
+the pretrained decoder, is the obvious next question and one our compute budget did not permit.
+
+For practitioners the practical recommendation is narrow but clear: in compressed-domain video
+captioning at modest data scale, upgrade the visual encoder and leave the decoder alone.
 
 %---------------------------------------------------------------------------------------------
 \appendix
