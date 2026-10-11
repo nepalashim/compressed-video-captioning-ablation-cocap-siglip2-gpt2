@@ -10,7 +10,9 @@ The short answer: **upgrade the encoder, leave the decoder alone.**
 
 ## Results
 
-VATEX subset (4,999 train / 1,000 val), 12 epochs, effective batch 12, single seed. Best epoch selected by validation CIDEr.
+VATEX subset (4,999 train / 1,000 val / 2,000 test), 12 epochs, effective batch 12, single training seed. Best epoch selected by validation CIDEr.
+
+### Validation split (used for checkpoint selection)
 
 | I-frame encoder | Decoder | BLEU-4 | METEOR | ROUGE-L | **CIDEr** | Best epoch | CIDEr @ final epoch |
 |---|---|---:|---:|---:|---:|:---:|---:|
@@ -18,9 +20,21 @@ VATEX subset (4,999 train / 1,000 val), 12 epochs, effective batch 12, single se
 | **SigLIP2** | **BERT-style** | **31.01** | **24.06** | **49.43** | **59.33** | 9 | **59.11** |
 | SigLIP2 | GPT-2 | 29.71 | 23.63 | 48.75 | 56.56 | 2 | 45.30 |
 
-**Encoder swap (row 1 to 2):** +4.48 CIDEr, and it holds at the final epoch rather than depending on epoch selection.
+### Held-out test split (2,000 clips, never seen by training or selection)
 
-**Decoder swap (row 2 to 3):** worse on every metric, and the gap is worse than it looks. GPT-2 peaks at **epoch 2** and then loses 11.3 CIDEr over the following nine epochs while its training loss falls 5.7x. That is textbook overfitting: a 124M-parameter pretrained decoder is too much capacity for a 5k-clip training set.
+Same three checkpoints, unchanged. Mean of three evaluation seeds; seed sd is at most 0.13 CIDEr.
+
+| I-frame encoder | Decoder | BLEU-4 | METEOR | ROUGE-L | **CIDEr** |
+|---|---|---:|---:|---:|---:|
+| CLIP ViT-B/16 | BERT-style (CoCap) | 29.04 | 22.61 | 48.11 | 45.32 |
+| **SigLIP2** | **BERT-style** | **29.31** | **22.77** | **48.20** | **49.18** |
+| SigLIP2 | GPT-2 | 28.52 | 22.46 | 47.72 | 45.92 |
+
+**Encoder swap (row 1 to 2):** +4.48 CIDEr on validation, **+3.86 on held-out test** — the headline result barely moves when the evaluation split no longer overlaps checkpoint selection. It also holds at the final epoch rather than depending on epoch selection.
+
+**Decoder swap (row 2 to 3):** worse on every metric, and the gap is worse than it looks. GPT-2 peaks at **epoch 2** and then loses 11.3 CIDEr over the following nine epochs while its training loss falls 5.7x. That is textbook overfitting: a 124M-parameter pretrained decoder is too much capacity for a 5k-clip training set. On the test split it keeps only +0.60 CIDEr over the baseline and falls *below* it on BLEU-4, METEOR and ROUGE-L, so the negative result is stronger on held-out data than on validation.
+
+**On the val-to-test drop.** All metrics are lower on test, CIDEr disproportionately (-16 to -19% relative, against -2 to -5% elsewhere). Two artefact explanations were tested and ruled out: rescoring the same test predictions against random 1,000-clip reference subsets moves CIDEr by only +0.54, and the caption distributions are near-identical (OOV token rate 0.93% val vs 0.92% test). The models do emit fewer rare words on test (17.4% to 15.1% of baseline output), which is the direction that depresses an IDF-weighted metric first, but that is an observation rather than an isolated mechanism. The attribution is a within-split comparison and is unaffected.
 
 ### Inference latency
 
@@ -42,10 +56,10 @@ So the recommended variant is both more accurate *and* slightly faster than the 
 
 These are stated up front rather than buried, because several of them would change how you read the table.
 
-1. **Not comparable to published CoCap numbers.** This trains on 4,999 VATEX clips, not the full ~26k, at a reduced sampling budget (5 GOPs x 16 B/P frames instead of 8 x 59), and evaluates on a 1,000-clip subset. Against CoCap's published VATEX result the reproduction lands mixed rather than uniformly below — CIDEr 54.85 vs 52.7 and METEOR 23.40 vs 23.2 sit above it, BLEU-4 29.67 vs 31.4 and ROUGE-L 48.92 vs 49.4 below — which reflects the evaluation subset, not an improvement. Only the *within-table* comparisons are meaningful.
-2. **Single seed per variant.** No variance estimate. The +4.48 CIDEr encoder gain is large and consistent across all four metrics and across epochs, so it is unlikely to be noise — but it is not a significance test.
+1. **Not comparable to published CoCap numbers.** This trains on 4,999 VATEX clips, not the full ~26k, at a reduced sampling budget (5 GOPs x 16 B/P frames instead of 8 x 59), and evaluates on 1,000 validation and 2,000 test clips. Against CoCap's published VATEX result the reproduction lands mixed rather than uniformly below — CIDEr 54.85 vs 52.7 and METEOR 23.40 vs 23.2 sit above it, BLEU-4 29.67 vs 31.4 and ROUGE-L 48.92 vs 49.4 below — which reflects the evaluation subset, not an improvement. The test split is drawn from VATEX's test partition but is a 2,000-clip subset scored under this repo's own protocol, so it is not the official VATEX evaluation either. Only the *within-table* comparisons are meaningful.
+2. **Single training seed per variant.** No training-run variance estimate. *Evaluation* variance is measured: the per-GOP frame sampler draws at random on every split, so rescoring one fixed checkpoint gives a seed sd of 0.15–0.21 CIDEr on validation and at most 0.13 on test (at most 0.10 on the other metrics). The +4.48 / +3.86 CIDEr encoder gain is more than an order of magnitude above that, but run-to-run *training* variance remains unmeasured, so this is still not a significance test.
 3. **The baseline's seeding is inconsistent.** Epochs 0–7 of the baseline ran before seeding was pinned; epochs 8–11 and both SigLIP2 variants ran under seed 42. The baseline was not re-run. This is a real limitation of the comparison, disclosed rather than smoothed over.
-4. **"Best epoch" is selection-inflated.** Picking the top epoch by validation CIDEr and reporting that same validation CIDEr is optimistic. The final-epoch column is given so you can read the honest number; the encoder conclusion survives either way, and the GPT-2 conclusion gets *worse* under final-epoch.
+4. **"Best epoch" is selection-inflated — on validation.** Picking the top epoch by validation CIDEr and reporting that same validation CIDEr is optimistic. The final-epoch column is given so you can read the honest number, and the held-out test table removes the problem entirely: those 2,000 clips played no part in selection. The encoder conclusion survives all three readings, and the GPT-2 conclusion gets *worse* under both final-epoch and held-out test.
 5. **The variants did not all converge equally cleanly.** The baseline plateaus clearly (per-epoch CIDEr gains of +1.2, +0.7, +0.1, +0.2 over its last four epochs), but SigLIP2 gains +2.8 as late as epoch 8 before settling within 0.6 CIDEr across its final three. No run is truncated mid-improvement, but what residual under-training exists sits on the SigLIP2 side — which makes the +4.48 CIDEr encoder gain a conservative estimate rather than an inflated one.
 6. **The GPT-2 result shows it is unsuited *at this data scale*** — it does not show GPT-2 is a bad decoder in general. Separating "wrong architecture" from "under-regularised / too little data" would need a frozen-decoder or larger-data run, which was not performed.
 
